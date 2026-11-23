@@ -88,28 +88,40 @@ func resolveBaseDir() string {
 }
 
 // pickBaseDir prefers a working directory that already holds JeeDesk's config.json. Otherwise the
-// executable's directory is used, unless go run placed the binary in a temp directory, in which
-// case the working directory is used.
+// executable's directory is used, except in development (go run, wails dev), where the working
+// directory is used.
 func pickBaseDir(cwd string, cwdOK bool, exePath string, exeOK bool) string {
-	if cwdOK && config.LooksLikeConfig(filepath.Join(cwd, "config.json")) {
+	if !cwdOK {
+		cwd = ""
+	}
+	if cwd != "" && config.LooksLikeConfig(filepath.Join(cwd, "config.json")) {
 		return cwd
 	}
 
 	if exeOK {
 		exeDir := filepath.Dir(exePath)
-		lowerExe := strings.ToLower(exeDir)
-		// When running via `go run`, the binary lives in a temp dir.
-		isTemp := strings.Contains(lowerExe, `\appdata\local\temp\`) ||
-			strings.Contains(lowerExe, `\go-build`)
-		if !isTemp {
+		if !isDevBinaryDir(exeDir, cwd) {
 			return exeDir
 		}
 	}
 
-	if cwdOK {
+	if cwd != "" {
 		return cwd
 	}
 	return "."
+}
+
+// isDevBinaryDir reports whether exeDir is where go run or wails dev place the binary: Go's build
+// cache under the user's temp directory, or the project's own build/bin. wails dev runs that binary
+// with the project root as working directory, so cwd is the project root; it is empty when the
+// working directory could not be determined, which leaves only the temp-directory check.
+func isDevBinaryDir(exeDir, cwd string) bool {
+	lowerExe := strings.ToLower(exeDir)
+	if strings.Contains(lowerExe, `\appdata\local\temp\`) ||
+		strings.Contains(lowerExe, `\go-build`) {
+		return true
+	}
+	return cwd != "" && strings.EqualFold(exeDir, filepath.Join(cwd, "build", "bin"))
 }
 
 var allowedCustomIconExts = map[string]bool{

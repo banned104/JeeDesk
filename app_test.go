@@ -588,3 +588,46 @@ func TestPickBaseDirSkipsForeignConfigInWorkingDir(t *testing.T) {
 		t.Fatalf("expected executable dir without config.json: got %q, want %q", got, exeDir)
 	}
 }
+
+func TestIsDevBinaryDir(t *testing.T) {
+	project := `F:\Codes\JeeDesk`
+	cases := []struct {
+		name   string
+		exeDir string
+		cwd    string
+		want   bool
+	}{
+		{"go run build cache", `C:\Users\u\AppData\Local\Temp\go-build123\b001\exe`, project, true},
+		{"go-build outside the default temp", `D:\tmp\go-build456\b001\exe`, project, true},
+		{"wails dev output", `F:\Codes\JeeDesk\build\bin`, project, true},
+		{"wails dev output, other case", `f:\codes\jeedesk\Build\Bin`, project, true},
+		{"packaged binary", `C:\Tools\JeeDesk`, project, false},
+		{"another project's build/bin", `F:\Codes\Other\build\bin`, project, false},
+		{"build/bin started with itself as working directory", `F:\Codes\JeeDesk\build\bin`, `F:\Codes\JeeDesk\build\bin`, false},
+		{"unknown working directory", `C:\Tools\JeeDesk`, "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isDevBinaryDir(tc.exeDir, tc.cwd); got != tc.want {
+				t.Fatalf("isDevBinaryDir(%q, %q) = %v, want %v", tc.exeDir, tc.cwd, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPickBaseDirUsesWorkingDirInDev(t *testing.T) {
+	// A path outside the temp directory, so only the build/bin rule can mark it as development.
+	volume := filepath.VolumeName(t.TempDir()) + `\`
+	cwd := filepath.Join(volume, "does-not-exist", "project")
+
+	// wails dev keeps the working directory and builds into <project>/build/bin.
+	if got := pickBaseDir(cwd, true, filepath.Join(cwd, "build", "bin", "JeeDesk.exe"), true); got != cwd {
+		t.Fatalf("wails dev: got %q, want working directory %q", got, cwd)
+	}
+
+	// Started from Explorer instead, the same binary runs with build/bin as working directory.
+	binDir := filepath.Join(cwd, "build", "bin")
+	if got := pickBaseDir(binDir, true, filepath.Join(binDir, "JeeDesk.exe"), true); got != binDir {
+		t.Fatalf("explorer launch: got %q, want executable directory %q", got, binDir)
+	}
+}

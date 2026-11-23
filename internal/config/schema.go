@@ -124,8 +124,11 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("read config %q: %w", path, err)
 	}
+	return parse(data, path)
+}
 
-	data = bytes.TrimPrefix(data, utf8BOM)
+func parse(data []byte, path string) (Config, error) {
+	data = stripBOM(data)
 
 	cfg := Config{
 		Settings: DefaultConfig().Settings,
@@ -138,21 +141,53 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
-// LoadOrCreate loads the config at path, or creates it with DefaultConfig if missing.
+func stripBOM(data []byte) []byte {
+	return bytes.TrimPrefix(data, utf8BOM)
+}
+
+// isBlank reports whether config file contents hold nothing but whitespace after an optional BOM.
+func isBlank(data []byte) bool {
+	return len(bytes.TrimSpace(stripBOM(data))) == 0
+}
+
+// LoadOrCreate loads the config at path. A missing or blank file carries nothing to load and is
+// created with DefaultConfig; any other existing file is loaded as is, even when it fails to parse.
 func LoadOrCreate(path string) (Config, error) {
-	_, err := os.Stat(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			cfg := DefaultConfig()
-			if saveErr := Save(path, cfg); saveErr != nil {
-				return Config{}, saveErr
-			}
-			return cfg, nil
-		}
-		return Config{}, fmt.Errorf("stat config %q: %w", path, err)
+	data, err := os.ReadFile(path)
+	switch {
+	case err != nil && !errors.Is(err, os.ErrNotExist):
+		return Config{}, fmt.Errorf("read config %q: %w", path, err)
+	case err == nil && !isBlank(data):
+		return parse(data, path)
 	}
 
-	return Load(path)
+	cfg := DefaultConfig()
+	if saveErr := Save(path, cfg); saveErr != nil {
+		return Config{}, saveErr
+	}
+	return cfg, nil
+}
+
+// LooksLikeConfig reports whether the file at path can be treated as this application's config.
+// A file that is not valid JSON may be a damaged config and is accepted: the Manager refuses to
+// overwrite it until it parses again. Valid JSON without any of the config's top-level keys
+// belongs to some other program and is rejected.
+func LooksLikeConfig(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	data = stripBOM(data)
+	if !json.Valid(data) {
+		return true
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return false
+	}
+	_, hasSettings := top["settings"]
+	_, hasGroups := top["groups"]
+	return hasSettings || hasGroups
 }
 
 // Save normalizes a copy of cfg and writes it atomically to path.

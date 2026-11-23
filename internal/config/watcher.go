@@ -1,6 +1,8 @@
 package config
 
 import (
+	"errors"
+	"fmt"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -12,12 +14,21 @@ import (
 
 const watchDebounceDelay = 200 * time.Millisecond
 
+// ErrWriteBlocked is returned by Update while config.json cannot be read or parsed. Saving then
+// would replace the file's actual contents with the in-memory copy.
+var ErrWriteBlocked = errors.New("config.json 当前无法读取或解析，已阻止写入以保护原文件")
+
 // Manager manages loading, thread-safe access, atomic updates, and live file watching of config.json.
 type Manager struct {
-	path     string
-	mu       sync.RWMutex
-	writeMu  sync.Mutex
-	current  Config
+	path    string
+	mu      sync.RWMutex
+	writeMu sync.Mutex
+	current Config
+
+	// diskErr is the last error from reading the config file, or nil while the file is valid.
+	// It is only accessed with writeMu held.
+	diskErr error
+
 	onUpdate func(Config)
 	onError  func(error)
 
@@ -53,6 +64,7 @@ func NewManagerWithFallback(configPath string, onUpdate func(Config), onError fu
 		return &Manager{
 			path:     cleaned,
 			current:  DefaultConfig(),
+			diskErr:  err,
 			onUpdate: onUpdate,
 			onError:  onError,
 		}, err
@@ -80,9 +92,14 @@ func (m *Manager) Get() Config {
 
 // Update serializes writes, applies mutate to a cloned config, normalizes it, and saves to disk.
 // In-memory state is kept consistent, while external/UI notifications flow through Reload via fsnotify.
+// While the file on disk cannot be read or parsed, Update refuses to save and returns ErrWriteBlocked.
 func (m *Manager) Update(mutate func(*Config) error) error {
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
+
+	if m.diskErr != nil {
+		return fmt.Errorf("%w（%v）", ErrWriteBlocked, m.diskErr)
+	}
 
 	next := m.Get()
 	if mutate != nil {
@@ -105,6 +122,7 @@ func (m *Manager) Update(mutate func(*Config) error) error {
 
 // Reload reads and parses config.json. On success it updates memory and calls onUpdate.
 // On error it preserves the last valid in-memory config, calls onError, and returns the error.
+// The error is also kept as the reason to block writes until a later load succeeds.
 func (m *Manager) Reload() (Config, error) {
 	m.writeMu.Lock()
 	cfg, err := Load(m.path)
@@ -113,6 +131,7 @@ func (m *Manager) Reload() (Config, error) {
 		m.current = Clone(cfg)
 		m.mu.Unlock()
 	}
+	m.diskErr = err
 	m.writeMu.Unlock()
 
 	if err != nil {

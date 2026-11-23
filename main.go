@@ -14,6 +14,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 
+	"jeedesk/internal/config"
 	"jeedesk/internal/resolver"
 )
 
@@ -80,21 +81,24 @@ func main() {
 }
 
 // resolveBaseDir picks the directory that holds config.json and icons/.
-// In development (go run / wails dev) or when config.json already exists in CWD,
-// CWD is used; for packaged binaries, the executable's directory is used.
 func resolveBaseDir() string {
 	cwd, cwdErr := os.Getwd()
-	if cwdErr == nil {
-		if _, err := os.Stat(filepath.Join(cwd, "config.json")); err == nil {
-			return cwd
-		}
+	exePath, exeErr := os.Executable()
+	return pickBaseDir(cwd, cwdErr == nil, exePath, exeErr == nil)
+}
+
+// pickBaseDir prefers a working directory that already holds JeeDesk's config.json. Otherwise the
+// executable's directory is used, unless go run placed the binary in a temp directory, in which
+// case the working directory is used.
+func pickBaseDir(cwd string, cwdOK bool, exePath string, exeOK bool) string {
+	if cwdOK && config.LooksLikeConfig(filepath.Join(cwd, "config.json")) {
+		return cwd
 	}
 
-	exePath, exeErr := os.Executable()
-	if exeErr == nil {
+	if exeOK {
 		exeDir := filepath.Dir(exePath)
 		lowerExe := strings.ToLower(exeDir)
-		// When running via `go run` or `wails dev`, the binary lives in a temp or build/bin dir.
+		// When running via `go run`, the binary lives in a temp dir.
 		isTemp := strings.Contains(lowerExe, `\appdata\local\temp\`) ||
 			strings.Contains(lowerExe, `\go-build`)
 		if !isTemp {
@@ -102,7 +106,7 @@ func resolveBaseDir() string {
 		}
 	}
 
-	if cwdErr == nil {
+	if cwdOK {
 		return cwd
 	}
 	return "."

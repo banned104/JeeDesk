@@ -369,3 +369,175 @@ func TestStartWatchingDebounceAndInvalidJSON(t *testing.T) {
 		t.Fatalf("expected at least 1 error recorded")
 	}
 }
+
+func TestLoadOrCreateBlankFileReplacedWithDefault(t *testing.T) {
+	blankContents := map[string][]byte{
+		"empty":          nil,
+		"whitespace":     []byte(" \r\n\t"),
+		"bom only":       {0xEF, 0xBB, 0xBF},
+		"bom and spaces": append([]byte{0xEF, 0xBB, 0xBF}, ' ', '\n'),
+	}
+	for name, content := range blankContents {
+		t.Run(name, func(t *testing.T) {
+			cfgPath := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(cfgPath, content, 0o644); err != nil {
+				t.Fatalf("WriteFile failed: %v", err)
+			}
+
+			cfg, err := LoadOrCreate(cfgPath)
+			if err != nil {
+				t.Fatalf("LoadOrCreate failed: %v", err)
+			}
+			if cfg.Settings.Hotkey != DefaultHotkey {
+				t.Fatalf("expected default hotkey, got %q", cfg.Settings.Hotkey)
+			}
+			if _, err := Load(cfgPath); err != nil {
+				t.Fatalf("expected a valid default config on disk, got %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadOrCreateLeavesBrokenFileUntouched(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	broken := []byte(`{"settings": { "hotkey": "Ctrl+K"`)
+	if err := os.WriteFile(cfgPath, broken, 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	if _, err := LoadOrCreate(cfgPath); err == nil {
+		t.Fatal("expected a parse error for broken config")
+	}
+	got, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	if !bytes.Equal(got, broken) {
+		t.Fatalf("broken config was modified:\n%s", got)
+	}
+}
+
+func TestLooksLikeConfig(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{"jeedesk config", `{"settings":{"hotkey":"Alt+G"},"groups":[]}`, true},
+		{"groups only", `{"groups":[{"id":"default","name":"常用工具","items":[]}]}`, true},
+		{"broken json", `{"settings": { broken json`, true},
+		{"blank", "   \n", true},
+		{"with bom", "\xEF\xBB\xBF" + `{"settings":{"hotkey":"Alt+G"}}`, true},
+		{"foreign object", `{"name":"other-app","version":2}`, false},
+		{"empty object", `{}`, false},
+		{"json array", `[1,2,3]`, false},
+		{"foreign object with bom", "\xEF\xBB\xBF" + `{"name":"other-app"}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfgPath := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(cfgPath, []byte(tc.content), 0o644); err != nil {
+				t.Fatalf("WriteFile failed: %v", err)
+			}
+			if got := LooksLikeConfig(cfgPath); got != tc.want {
+				t.Fatalf("LooksLikeConfig() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	if LooksLikeConfig(filepath.Join(t.TempDir(), "missing.json")) {
+		t.Fatal("a missing file must not look like a config")
+	}
+}
+
+func TestManagerBlocksWritesWhileConfigBroken(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	broken := []byte(`{"settings": { "hotkey": "Ctrl+K"`)
+	if err := os.WriteFile(cfgPath, broken, 0o644); err != nil {
+		t.Fatalf("WriteFile broken config failed: %v", err)
+	}
+
+	mgr, err := NewManagerWithFallback(cfgPath, nil, nil)
+	if err == nil {
+		t.Fatal("expected a load error for broken config")
+	}
+	defer func() { _ = mgr.Close() }()
+
+	addGroup := func(c *Config) error {
+		c.Groups = append(c.Groups, Group{ID: "g", Name: "G"})
+		return nil
+	}
+
+	// A write must be refused and must leave both the file and memory untouched.
+	err = mgr.Update(addGroup)
+	if !errors.Is(err, ErrWriteBlocked) {
+		t.Fatalf("expected ErrWriteBlocked, got %v", err)
+	}
+	got, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	if !bytes.Equal(got, broken) {
+		t.Fatalf("broken config was overwritten:\n%s", got)
+	}
+	if n := len(mgr.Get().Groups); n != 1 {
+		t.Fatalf("refused Update changed the in-memory config: %d groups", n)
+	}
+
+	// Repairing the file and reloading lifts the block.
+	repaired := DefaultConfig()
+	repaired.Settings.Hotkey = "Ctrl+K"
+	if err := Save(cfgPath, repaired); err != nil {
+		t.Fatalf("Save repaired config failed: %v", err)
+	}
+	if _, err := mgr.Reload(); err != nil {
+		t.Fatalf("Reload after repair failed: %v", err)
+	}
+	if err := mgr.Update(addGroup); err != nil {
+		t.Fatalf("Update after repair failed: %v", err)
+	}
+	onDisk, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load after Update failed: %v", err)
+	}
+	if len(onDisk.Groups) != 2 || onDisk.Settings.Hotkey != "Ctrl+K" {
+		t.Fatalf("unexpected config after repair: %+v", onDisk)
+	}
+}
+
+func TestManagerBlocksWritesAfterBrokenExternalEdit(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+
+	mgr, err := NewManager(cfgPath, nil, nil)
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	broken := []byte(`{"settings": { "hotkey": "Ctrl+J"`)
+	if err := os.WriteFile(cfgPath, broken, 0o644); err != nil {
+		t.Fatalf("WriteFile broken config failed: %v", err)
+	}
+	if _, err := mgr.Reload(); err == nil {
+		t.Fatal("expected Reload to fail on broken config")
+	}
+
+	// The last valid config stays in memory, but must not be saved over the user's edit.
+	err = mgr.Update(func(c *Config) error {
+		c.Groups = append(c.Groups, Group{ID: "g", Name: "G"})
+		return nil
+	})
+	if !errors.Is(err, ErrWriteBlocked) {
+		t.Fatalf("expected ErrWriteBlocked, got %v", err)
+	}
+	got, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	if !bytes.Equal(got, broken) {
+		t.Fatalf("user's edit was overwritten:\n%s", got)
+	}
+	if n := len(mgr.Get().Groups); n != 1 {
+		t.Fatalf("in-memory config changed while blocked: %d groups", n)
+	}
+}

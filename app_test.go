@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -501,4 +503,88 @@ func TestSingleInstanceLockAndWake(t *testing.T) {
 		t.Fatalf("expected third AcquireSingleInstance after Close() to be primary, got isPrimary=%v", isThirdPrimary)
 	}
 	third.Close()
+}
+
+func TestAppWritesRefusedWhileConfigBroken(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	broken := []byte(`{"settings": { "hotkey": "Ctrl+K"`)
+	if err := os.WriteFile(app.configPath, broken, 0o644); err != nil {
+		t.Fatalf("write broken config: %v", err)
+	}
+	if _, err := app.cfgMgr.Reload(); err == nil {
+		t.Fatal("expected Reload to fail on broken config")
+	}
+
+	// A change made through the app must be refused and leave the user's file as it is.
+	err := app.AddGroup("不会写入")
+	if !errors.Is(err, config.ErrWriteBlocked) {
+		t.Fatalf("expected ErrWriteBlocked, got %v", err)
+	}
+	got, err := os.ReadFile(app.configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if !bytes.Equal(got, broken) {
+		t.Fatalf("broken config.json was overwritten:\n%s", got)
+	}
+
+	// Once the file is fixed and reloaded, changes go through again.
+	if err := config.Save(app.configPath, config.DefaultConfig()); err != nil {
+		t.Fatalf("repair config: %v", err)
+	}
+	if _, err := app.cfgMgr.Reload(); err != nil {
+		t.Fatalf("reload repaired config: %v", err)
+	}
+	if err := app.AddGroup("修复后写入"); err != nil {
+		t.Fatalf("AddGroup after repair failed: %v", err)
+	}
+	onDisk, err := config.Load(app.configPath)
+	if err != nil {
+		t.Fatalf("Load after AddGroup failed: %v", err)
+	}
+	if len(onDisk.Groups) != 2 {
+		t.Fatalf("expected 2 groups on disk after repair, got %d", len(onDisk.Groups))
+	}
+}
+
+func TestPickBaseDirSkipsForeignConfigInWorkingDir(t *testing.T) {
+	cwd := t.TempDir()
+	// Only the path matters here, so the executable does not have to exist. It is kept out of the
+	// temp directory so that it does not look like a go run binary.
+	exeDir := filepath.Join(filepath.VolumeName(cwd)+`\`, "JeeDesk")
+	exePath := filepath.Join(exeDir, "JeeDesk.exe")
+	cfgPath := filepath.Join(cwd, "config.json")
+
+	// A config.json that parses as JSON but has none of JeeDesk's keys belongs to another program.
+	if err := os.WriteFile(cfgPath, []byte(`{"name":"other-app","scripts":{}}`), 0o644); err != nil {
+		t.Fatalf("write foreign config: %v", err)
+	}
+	if got := pickBaseDir(cwd, true, exePath, true); got != exeDir {
+		t.Fatalf("foreign config.json was adopted: got %q, want %q", got, exeDir)
+	}
+
+	// JeeDesk's own config is adopted.
+	if err := os.WriteFile(cfgPath, []byte(`{"settings":{"hotkey":"Alt+K"},"groups":[]}`), 0o644); err != nil {
+		t.Fatalf("write jeedesk config: %v", err)
+	}
+	if got := pickBaseDir(cwd, true, exePath, true); got != cwd {
+		t.Fatalf("JeeDesk config.json was not adopted: got %q, want %q", got, cwd)
+	}
+
+	// A config that no longer parses may still be JeeDesk's, so it is adopted and reported as broken.
+	if err := os.WriteFile(cfgPath, []byte(`{"settings": { broken`), 0o644); err != nil {
+		t.Fatalf("write broken config: %v", err)
+	}
+	if got := pickBaseDir(cwd, true, exePath, true); got != cwd {
+		t.Fatalf("broken config.json was not adopted: got %q, want %q", got, cwd)
+	}
+
+	// Without a config.json there, the executable's directory is used.
+	if err := os.Remove(cfgPath); err != nil {
+		t.Fatalf("remove config: %v", err)
+	}
+	if got := pickBaseDir(cwd, true, exePath, true); got != exeDir {
+		t.Fatalf("expected executable dir without config.json: got %q, want %q", got, exeDir)
+	}
 }

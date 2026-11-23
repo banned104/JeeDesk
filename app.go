@@ -304,7 +304,7 @@ func (a *App) onConfigError(err error) {
 	a.errMu.Unlock()
 
 	if !duplicate && a.alertFunc != nil {
-		go a.alertFunc("JeeDesk 配置文件语法错误", fmt.Sprintf("config.json 解析失败，已保留上一次有效配置：\n\n%s", msg))
+		go a.alertFunc("JeeDesk 配置文件错误", fmt.Sprintf("config.json 无法读取或解析。\n修复之前 JeeDesk 不会写入该文件，原内容保持不变：\n\n%s", msg))
 	}
 }
 

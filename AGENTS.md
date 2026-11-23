@@ -23,8 +23,10 @@
 | `frontend/src` | Vue 界面。`api/bridge.ts` 封装后端调用：自行声明 `WailsGoApp` 接口并直接访问 `window.go.main.App`，同时内置脱离 Wails 在浏览器中开发用的 mock |
 | `frontend/wailsjs` | Wails 构建时自动生成并纳入版本管理，不手工编辑；前端源码不引用它 |
 
-运行时数据是 `config.json` 与 `icons/` 图标缓存：打包后位于可执行文件所在目录，
-开发运行（`go run`、`wails dev`）时为当前工作目录。两者均被 `.gitignore` 忽略。
+运行时数据是 `config.json` 与 `icons/` 图标缓存，目录由 `resolveBaseDir` 决定：当前工作目录
+已有 `config.json` 时直接采用该目录；否则用可执行文件所在目录（`wails dev` 下即
+`build/bin/`）；仅当可执行文件位于临时目录（`go run`）时回退到当前工作目录。
+两者均被 `.gitignore` 忽略。
 
 ## 通用流程来源
 

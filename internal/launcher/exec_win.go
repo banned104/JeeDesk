@@ -1,0 +1,253 @@
+package launcher
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
+)
+
+var (
+	modShell32        = windows.NewLazySystemDLL("shell32.dll")
+	procShellExecuteW = modShell32.NewProc("ShellExecuteW")
+)
+
+// Launch starts the given executable, script, document, folder, or URL
+// asynchronously using Win32 ShellExecuteW.
+func Launch(targetPath, args, workDir string) error {
+	file, params, dir, err := resolveLaunchParams(targetPath, args, workDir)
+	if err != nil {
+		return err
+	}
+	return shellExecute("open", file, params, dir)
+}
+
+// OpenFolderAndSelect opens Windows Explorer and selects targetPath.
+func OpenFolderAndSelect(targetPath string) error {
+	args, err := resolveSelectArgs(targetPath)
+	if err != nil {
+		return err
+	}
+	return shellExecute("open", "explorer.exe", args, "")
+}
+
+// OpenFile opens filePath with its default associated Windows application.
+func OpenFile(filePath string) error {
+	cleaned, dir, err := resolveOpenFileParams(filePath)
+	if err != nil {
+		return err
+	}
+	return shellExecute("open", cleaned, "", dir)
+}
+
+func resolveSelectArgs(targetPath string) (string, error) {
+	cleaned := strings.TrimSpace(targetPath)
+	if cleaned == "" {
+		return "", errors.New("target path cannot be empty")
+	}
+	cleaned = expandEnvVars(cleaned)
+	cleaned = filepath.Clean(cleaned)
+	return `/select,"` + cleaned + `"`, nil
+}
+
+func resolveOpenFileParams(filePath string) (cleaned, dir string, err error) {
+	cleaned = strings.TrimSpace(filePath)
+	if cleaned == "" {
+		return "", "", errors.New("file path cannot be empty")
+	}
+	cleaned = expandEnvVars(cleaned)
+	cleaned = filepath.Clean(cleaned)
+	return cleaned, filepath.Dir(cleaned), nil
+}
+
+func resolveLaunchParams(targetPath, args, workDir string) (file, params, dir string, err error) {
+	target := strings.TrimSpace(targetPath)
+	if target == "" {
+		return "", "", "", errors.New("target path cannot be empty")
+	}
+
+	target = expandEnvVars(target)
+	uri := isURI(target)
+	if !uri {
+		target = filepath.Clean(target)
+	}
+
+	params = strings.TrimSpace(args)
+	dir = strings.TrimSpace(workDir)
+	if dir != "" {
+		dir = filepath.Clean(expandEnvVars(dir))
+	} else if !uri {
+		if info, statErr := os.Stat(target); statErr == nil {
+			if info.IsDir() {
+				dir = target
+			} else {
+				dir = filepath.Dir(target)
+			}
+		}
+	}
+
+	// Windows default "open" verb for .ps1 often opens Notepad instead of running
+	// the script, so invoke PowerShell explicitly via ShellExecuteW.
+	if !uri && strings.EqualFold(filepath.Ext(target), ".ps1") {
+		psArgs := fmt.Sprintf(`-NoProfile -ExecutionPolicy Bypass -File "%s"`, target)
+		if params != "" {
+			psArgs += " " + params
+		}
+		return findPowerShell(), psArgs, dir, nil
+	}
+
+	return target, params, dir, nil
+}
+
+func shellExecute(verb, file, params, dir string) error {
+	verbPtr, err := windows.UTF16PtrFromString(verb)
+	if err != nil {
+		return fmt.Errorf("invalid verb: %w", err)
+	}
+	filePtr, err := windows.UTF16PtrFromString(file)
+	if err != nil {
+		return fmt.Errorf("invalid target path: %w", err)
+	}
+
+	var paramsPtr *uint16
+	if params != "" {
+		paramsPtr, err = windows.UTF16PtrFromString(params)
+		if err != nil {
+			return fmt.Errorf("invalid arguments: %w", err)
+		}
+	}
+
+	var dirPtr *uint16
+	if dir != "" {
+		dirPtr, err = windows.UTF16PtrFromString(dir)
+		if err != nil {
+			return fmt.Errorf("invalid working directory: %w", err)
+		}
+	}
+
+	ret, _, _ := procShellExecuteW.Call(
+		0,
+		uintptr(unsafe.Pointer(verbPtr)),
+		uintptr(unsafe.Pointer(filePtr)),
+		uintptr(unsafe.Pointer(paramsPtr)),
+		uintptr(unsafe.Pointer(dirPtr)),
+		uintptr(windows.SW_SHOWNORMAL),
+	)
+	if ret <= 32 {
+		return shellExecuteError(ret)
+	}
+	return nil
+}
+
+func shellExecuteError(code uintptr) error {
+	if code > 32 {
+		return nil
+	}
+	switch code {
+	case 0:
+		return errors.New("ShellExecuteW failed: operating system is out of memory or resources (code 0)")
+	case 2:
+		return errors.New("ShellExecuteW failed: file not found (code 2)")
+	case 3:
+		return errors.New("ShellExecuteW failed: path not found (code 3)")
+	case 5:
+		return errors.New("ShellExecuteW failed: access denied (code 5)")
+	case 8:
+		return errors.New("ShellExecuteW failed: insufficient memory (code 8)")
+	case 11:
+		return errors.New("ShellExecuteW failed: invalid executable format (code 11)")
+	case 26:
+		return errors.New("ShellExecuteW failed: sharing violation (code 26)")
+	case 27:
+		return errors.New("ShellExecuteW failed: file name association is incomplete or invalid (code 27)")
+	case 28:
+		return errors.New("ShellExecuteW failed: DDE transaction timed out (code 28)")
+	case 29:
+		return errors.New("ShellExecuteW failed: DDE transaction failed (code 29)")
+	case 30:
+		return errors.New("ShellExecuteW failed: DDE transaction busy (code 30)")
+	case 31:
+		return errors.New("ShellExecuteW failed: no application associated with this file type (code 31)")
+	case 32:
+		return errors.New("ShellExecuteW failed: specified DLL not found (code 32)")
+	default:
+		return fmt.Errorf("ShellExecuteW failed with error code %d", code)
+	}
+}
+
+func expandEnvVars(s string) string {
+	if !strings.Contains(s, "%") {
+		return s
+	}
+	src, err := windows.UTF16PtrFromString(s)
+	if err != nil {
+		return s
+	}
+
+	buf := make([]uint16, 260)
+	n, err := windows.ExpandEnvironmentStrings(src, &buf[0], uint32(len(buf)))
+	if err != nil || n == 0 {
+		return s
+	}
+	if n > uint32(len(buf)) {
+		buf = make([]uint16, n)
+		n, err = windows.ExpandEnvironmentStrings(src, &buf[0], uint32(len(buf)))
+		if err != nil || n == 0 || n > uint32(len(buf)) {
+			return s
+		}
+	}
+	return windows.UTF16ToString(buf[:n])
+}
+
+func isURI(s string) bool {
+	if strings.Contains(s, "://") {
+		return true
+	}
+	colonIdx := strings.IndexByte(s, ':')
+	// Require at least 2 scheme characters so Windows drive letters (e.g. C:\) are not treated as URIs.
+	if colonIdx <= 1 {
+		return false
+	}
+	scheme := s[:colonIdx]
+	for i := 0; i < len(scheme); i++ {
+		c := scheme[i]
+		isAlphaNum := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+		if !isAlphaNum && c != '+' && c != '-' && c != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+func findPowerShell() string {
+	if existsInPath("powershell.exe") {
+		return "powershell.exe"
+	}
+	if sysRoot := os.Getenv("SystemRoot"); sysRoot != "" {
+		winPS := filepath.Join(sysRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+		if info, err := os.Stat(winPS); err == nil && !info.IsDir() {
+			return "powershell.exe"
+		}
+	}
+	if existsInPath("pwsh.exe") {
+		return "pwsh.exe"
+	}
+	return "powershell.exe"
+}
+
+func existsInPath(binary string) bool {
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if dir == "" {
+			continue
+		}
+		candidate := filepath.Join(dir, binary)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return true
+		}
+	}
+	return false
+}

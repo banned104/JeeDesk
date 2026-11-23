@@ -1,0 +1,12 @@
+# Runtime generated files
+config.json
+icons/
+
+# Build outputs
+build/bin/
+*.exe
+*.syso
+
+# Frontend dependencies & build
+frontend/node_modules/
+frontend/dist/

@@ -1,0 +1,209 @@
+package main
+
+import (
+	"embed"
+	"log"
+	"mime"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/wailsapp/wails/v2"
+	"github.com/wailsapp/wails/v2/pkg/options"
+	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/windows"
+
+	"jeedesk/internal/resolver"
+)
+
+//go:embed all:frontend/dist
+var assets embed.FS
+
+func main() {
+	baseDir := resolveBaseDir()
+	app := NewApp(baseDir)
+
+	si, isPrimary, err := AcquireSingleInstance(
+		singleInstanceMutexName,
+		singleInstanceClassName,
+		singleInstanceWindowName,
+		app.ShowWindow,
+	)
+	if err != nil {
+		log.Printf("[single-instance] acquire failed: %v", err)
+	} else if !isPrimary {
+		return
+	}
+	if si != nil {
+		defer si.Close()
+	}
+
+	err = wails.Run(&options.App{
+		Title:            "JeeDesk",
+		Width:            800,
+		Height:           520,
+		MinWidth:         580,
+		MinHeight:        380,
+		Frameless:        true,
+		StartHidden:      false,
+		AlwaysOnTop:      true,
+		BackgroundColour: &options.RGBA{R: 18, G: 22, B: 32, A: 0},
+		AssetServer: &assetserver.Options{
+			Assets:     assets,
+			Middleware: newIconMiddleware(app.iconsDir),
+		},
+		DragAndDrop: &options.DragAndDrop{
+			EnableFileDrop:     true,
+			DisableWebViewDrop: true,
+			CSSDropProperty:    "--wails-drop-target",
+			CSSDropValue:       "drop",
+		},
+		OnStartup:     app.startup,
+		OnDomReady:    app.domReady,
+		OnBeforeClose: app.beforeClose,
+		OnShutdown:    app.shutdown,
+		Bind: []interface{}{
+			app,
+		},
+		Windows: &windows.Options{
+			WebviewIsTransparent: true,
+			WindowIsTranslucent:  true,
+			BackdropType:         windows.Acrylic,
+			DisableWindowIcon:    true,
+			Theme:                windows.Dark,
+		},
+	})
+	if err != nil {
+		log.Fatalf("JeeDesk failed to start: %v", err)
+	}
+}
+
+// resolveBaseDir picks the directory that holds config.json and icons/.
+// In development (go run / wails dev) or when config.json already exists in CWD,
+// CWD is used; for packaged binaries, the executable's directory is used.
+func resolveBaseDir() string {
+	cwd, cwdErr := os.Getwd()
+	if cwdErr == nil {
+		if _, err := os.Stat(filepath.Join(cwd, "config.json")); err == nil {
+			return cwd
+		}
+	}
+
+	exePath, exeErr := os.Executable()
+	if exeErr == nil {
+		exeDir := filepath.Dir(exePath)
+		lowerExe := strings.ToLower(exeDir)
+		// When running via `go run` or `wails dev`, the binary lives in a temp or build/bin dir.
+		isTemp := strings.Contains(lowerExe, `\appdata\local\temp\`) ||
+			strings.Contains(lowerExe, `\go-build`)
+		if !isTemp {
+			return exeDir
+		}
+	}
+
+	if cwdErr == nil {
+		return cwd
+	}
+	return "."
+}
+
+var allowedCustomIconExts = map[string]bool{
+	".png":  true,
+	".jpg":  true,
+	".jpeg": true,
+	".webp": true,
+	".gif":  true,
+	".bmp":  true,
+	".svg":  true,
+	".ico":  true,
+}
+
+// newIconMiddleware serves cached icons from /icons/<file> and user-specified
+// custom icons from /custom-icon?path=<encoded-path>.
+func newIconMiddleware(iconsDir string) assetserver.Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case strings.HasPrefix(r.URL.Path, "/icons/"):
+				serveCachedIcon(w, r, iconsDir)
+				return
+			case r.URL.Path == "/custom-icon":
+				serveCustomIcon(w, r, iconsDir)
+				return
+			default:
+				next.ServeHTTP(w, r)
+			}
+		})
+	}
+}
+
+func serveCachedIcon(w http.ResponseWriter, r *http.Request, iconsDir string) {
+	rel := strings.TrimPrefix(r.URL.Path, "/icons/")
+	if rel == "" || strings.ContainsAny(rel, `/\`) || rel == "." || rel == ".." {
+		http.NotFound(w, r)
+		return
+	}
+
+	safeName := filepath.Base(rel)
+	if safeName != rel {
+		http.NotFound(w, r)
+		return
+	}
+
+	fullPath := filepath.Join(iconsDir, safeName)
+	info, err := os.Stat(fullPath)
+	if err != nil || info.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Cache-Control", "no-cache")
+	if ct := mime.TypeByExtension(filepath.Ext(fullPath)); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	http.ServeFile(w, r, fullPath)
+}
+
+func serveCustomIcon(w http.ResponseWriter, r *http.Request, iconsDir string) {
+	rawPath := strings.TrimSpace(r.URL.Query().Get("path"))
+	if rawPath == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	cleaned := filepath.Clean(rawPath)
+	ext := strings.ToLower(filepath.Ext(cleaned))
+
+	// If user points custom icon to an executable/dll, extract & serve its cached PNG.
+	if ext == ".exe" || ext == ".dll" {
+		relIcon, err := resolver.ExtractAndCacheIcon(cleaned, iconsDir)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		filename := filepath.Base(relIcon)
+		fullPath := filepath.Join(iconsDir, filename)
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Content-Type", "image/png")
+		http.ServeFile(w, r, fullPath)
+		return
+	}
+
+	if !allowedCustomIconExts[ext] {
+		http.Error(w, "unsupported icon format", http.StatusForbidden)
+		return
+	}
+
+	info, err := os.Stat(cleaned)
+	if err != nil || info.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Cache-Control", "no-cache")
+	if ct := mime.TypeByExtension(ext); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	http.ServeFile(w, r, cleaned)
+}

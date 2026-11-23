@@ -1,0 +1,15 @@
+{
+  "fixed": {
+    "file_version": "1.0.0"
+  },
+  "info": {
+    "0000": {
+      "ProductVersion": "1.0.0",
+      "CompanyName": "JeeDesk",
+      "FileDescription": "JeeDesk - Minimalist Desktop Quick Launcher",
+      "LegalCopyright": "Copyright © 2026 JeeDesk",
+      "ProductName": "JeeDesk",
+      "Comments": "Windows minimalist frosted-glass quick launcher"
+    }
+  }
+}

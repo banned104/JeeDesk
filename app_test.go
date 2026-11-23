@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"jeedesk/internal/config"
+	"jeedesk/internal/hook"
 	"jeedesk/internal/tray"
 )
 
@@ -629,5 +630,90 @@ func TestPickBaseDirUsesWorkingDirInDev(t *testing.T) {
 	binDir := filepath.Join(cwd, "build", "bin")
 	if got := pickBaseDir(binDir, true, filepath.Join(binDir, "JeeDesk.exe"), true); got != binDir {
 		t.Fatalf("explorer launch: got %q, want executable directory %q", got, binDir)
+	}
+}
+
+// Hotkeys for the app-level hotkey tests. The hook package's own tests use Ctrl+Alt+Shift+F20 to
+// F23 and run in a separate process, so these stay clear of them.
+const (
+	testHotkeyFree = "Ctrl+Alt+Shift+F19"
+	testHotkeyHeld = "Ctrl+Alt+Shift+F24"
+)
+
+func newHotkeyTestApp(t *testing.T) (*App, *hook.HotkeyManager, *[]string) {
+	t.Helper()
+	app, _ := newTestApp(t)
+	mgr := hook.NewHotkeyManager(func() {})
+	t.Cleanup(mgr.Stop)
+	app.hotkeyMgr = mgr
+
+	toasts := &[]string{}
+	app.toastFunc = func(_, message string) { *toasts = append(*toasts, message) }
+	return app, mgr, toasts
+}
+
+// holdHotkey registers spec from a second manager, the way another program would occupy it.
+func holdHotkey(t *testing.T, spec string) *hook.HotkeyManager {
+	t.Helper()
+	holder := hook.NewHotkeyManager(func() {})
+	if err := holder.Start(spec); err != nil {
+		holder.Stop()
+		t.Skipf("cannot register %s on this machine: %v", spec, err)
+	}
+	t.Cleanup(holder.Stop)
+	return holder
+}
+
+func TestHotkeyStatusFollowsActualRegistration(t *testing.T) {
+	app, mgr, toasts := newHotkeyTestApp(t)
+	holdHotkey(t, testHotkeyHeld)
+
+	if err := mgr.Start(testHotkeyFree); err != nil {
+		t.Skipf("cannot register %s on this machine: %v", testHotkeyFree, err)
+	}
+
+	// Switching to a hotkey another program holds fails and keeps the current one.
+	app.applyHotkey(testHotkeyHeld, true)
+	if st := app.GetHotkeyStatus(); st.Registered || st.Hotkey != testHotkeyHeld {
+		t.Fatalf("expected %s to be reported as not registered, got %+v", testHotkeyHeld, st)
+	}
+	if got := app.appliedHotkey; got != testHotkeyFree {
+		t.Fatalf("expected %s to stay applied, got %q", testHotkeyFree, got)
+	}
+
+	// Going back to the hotkey that is still held only has to refresh the reported status.
+	app.syncHooks(config.Settings{Hotkey: testHotkeyFree}, true)
+	st := app.GetHotkeyStatus()
+	if !st.Registered || st.Hotkey != testHotkeyFree || st.Error != "" {
+		t.Fatalf("expected %s to be reported as registered, got %+v", testHotkeyFree, st)
+	}
+
+	// A config reload that echoes the same failing change does not repeat the message.
+	app.applyHotkey(testHotkeyHeld, true)
+	app.applyHotkey(testHotkeyHeld, false)
+	if n := len(*toasts); n != 2 {
+		t.Fatalf("expected %d toasts, got %d: %q", 2, n, *toasts)
+	}
+}
+
+func TestManualReloadRetriesUnregisteredHotkey(t *testing.T) {
+	app, _, _ := newHotkeyTestApp(t)
+	holder := holdHotkey(t, testHotkeyHeld)
+
+	// The configured hotkey is already taken when it is first applied.
+	if err := app.SaveSettings(config.Settings{Hotkey: testHotkeyHeld, MouseTrigger: "none"}); err != nil {
+		t.Fatalf("SaveSettings failed: %v", err)
+	}
+	if app.GetHotkeyStatus().Registered {
+		t.Fatalf("expected the held hotkey not to be registered, got %+v", app.GetHotkeyStatus())
+	}
+
+	// Once it is released, a manual reload registers it.
+	holder.Stop()
+	if err := app.ReloadConfig(); err != nil {
+		t.Fatalf("ReloadConfig failed: %v", err)
+	}
+	if st := app.GetHotkeyStatus(); !st.Registered || st.Hotkey != testHotkeyHeld {
+		t.Fatalf("expected %s to be registered after a manual reload, got %+v", testHotkeyHeld, st)
 	}
 }

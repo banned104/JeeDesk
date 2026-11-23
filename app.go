@@ -73,6 +73,7 @@ type App struct {
 	startupNotice string
 
 	alertFunc       func(title, message string)
+	toastFunc       func(level, message string)
 	findMainHwndFn  func() uintptr
 	isVisibleFn     func(uintptr) bool
 	isProcessFgFn   func() bool
@@ -274,6 +275,10 @@ func (a *App) emitEvent(name string, data ...interface{}) {
 }
 
 func (a *App) emitToast(level, message string) {
+	if a.toastFunc != nil {
+		a.toastFunc(level, message)
+		return
+	}
 	a.emitEvent("ui:toast", toastPayload{
 		Type:    level,
 		Message: message,
@@ -285,7 +290,7 @@ func (a *App) onConfigUpdated(cfg config.Config) {
 	a.lastConfigErr = ""
 	a.errMu.Unlock()
 
-	a.syncHooks(cfg.Settings)
+	a.syncHooks(cfg.Settings, false)
 	a.ensureValidActiveGroup(cfg)
 	a.emitEvent("config:updated", cfg)
 }
@@ -308,46 +313,62 @@ func (a *App) onConfigError(err error) {
 	}
 }
 
-func (a *App) applyHotkey(spec string, emitFailureToast bool) {
+// applyHotkey switches the global hotkey to spec and records what the hook holds afterwards: a
+// failed switch leaves the previous hotkey registered. explicit marks a change the user asked for.
+// Otherwise a failure that has already been reported is not reported again, which keeps a config
+// reload echoing a saved change from repeating the same message.
+func (a *App) applyHotkey(spec string, explicit bool) {
 	if a.hotkeyMgr == nil {
 		return
 	}
-	if err := a.hotkeyMgr.Update(spec); err != nil {
+	err := a.hotkeyMgr.Update(spec)
+	status := HotkeyStatus{Hotkey: spec}
+	if err != nil {
 		log.Printf("[hook] hotkey update failed (%q): %v", spec, err)
-		status := HotkeyStatus{
-			Hotkey:     spec,
-			Registered: false,
-			Error:      err.Error(),
-		}
-		a.hookMu.Lock()
-		a.hotkeyStatus = status
-		a.hookMu.Unlock()
-		a.emitEvent("hotkey:status", status)
-		if emitFailureToast {
-			a.emitToast("error", fmt.Sprintf("快捷键 %s 注册失败: %v", spec, err))
-		}
-		return
+		status.Error = err.Error()
+	} else {
+		status.Registered = true
 	}
 
-	status := HotkeyStatus{
-		Hotkey:     spec,
-		Registered: true,
-	}
 	a.hookMu.Lock()
-	a.appliedHotkey = spec
+	prev := a.hotkeyStatus
+	a.appliedHotkey = a.hotkeyMgr.ActiveSpec()
+	a.hotkeyStatus = status
+	a.hookMu.Unlock()
+	a.emitEvent("hotkey:status", status)
+
+	alreadyReported := !prev.Registered && prev.Hotkey == spec && prev.Error == status.Error
+	if err != nil && (explicit || !alreadyReported) {
+		a.emitToast("error", fmt.Sprintf("快捷键 %s 注册失败: %v", spec, err))
+	}
+}
+
+// setHotkeyStatus replaces the reported hotkey state without touching the hook.
+func (a *App) setHotkeyStatus(status HotkeyStatus) {
+	a.hookMu.Lock()
 	a.hotkeyStatus = status
 	a.hookMu.Unlock()
 	a.emitEvent("hotkey:status", status)
 }
 
-func (a *App) syncHooks(settings config.Settings) {
+// syncHooks brings the global hotkey and mouse trigger in line with settings. explicit marks a
+// change made in the app, as opposed to one picked up from config.json by the file watcher.
+func (a *App) syncHooks(settings config.Settings, explicit bool) {
 	a.hookMu.Lock()
 	prevHotkey := a.appliedHotkey
+	status := a.hotkeyStatus
 	prevMouse := a.appliedMouse
 	a.hookMu.Unlock()
 
-	if a.hotkeyMgr != nil && settings.Hotkey != prevHotkey {
-		a.applyHotkey(settings.Hotkey, true)
+	if a.hotkeyMgr != nil {
+		switch {
+		case settings.Hotkey != prevHotkey:
+			a.applyHotkey(settings.Hotkey, explicit)
+		case !status.Registered || status.Hotkey != settings.Hotkey:
+			// The hook already holds the configured hotkey; only the reported status lags behind,
+			// for example after a failed switch away from it.
+			a.setHotkeyStatus(HotkeyStatus{Hotkey: settings.Hotkey, Registered: true})
+		}
 	}
 
 	if a.mouseMgr != nil && settings.MouseTrigger != prevMouse {
@@ -855,17 +876,14 @@ func (a *App) SaveSettings(settings config.Settings) error {
 		return err
 	}
 
-	a.syncHooks(settings)
+	a.syncHooks(settings, true)
 	a.emitToast("success", "设置已保存")
 	return nil
 }
 
-// ReloadConfig forces an immediate reload of config.json.
+// ReloadConfig forces an immediate reload of config.json. It is also how the user retries a hotkey
+// that failed to register, for example after the program holding it was closed.
 func (a *App) ReloadConfig() error {
-	a.hookMu.Lock()
-	prevHotkey := a.appliedHotkey
-	a.hookMu.Unlock()
-
 	if a.cfgMgr == nil {
 		mgr, err := config.NewManager(a.configPath, a.onConfigUpdated, a.onConfigError)
 		if err != nil {
@@ -876,9 +894,8 @@ func (a *App) ReloadConfig() error {
 		_ = a.cfgMgr.StartWatching()
 		cfg := mgr.Get()
 		a.onConfigUpdated(cfg)
-		if a.hotkeyMgr != nil && !a.GetHotkeyStatus().Registered && cfg.Settings.Hotkey == prevHotkey {
-			a.applyHotkey(cfg.Settings.Hotkey, true)
-		}
+		// The user asked for this reload, so a hotkey that still fails to register is reported.
+		a.syncHooks(cfg.Settings, true)
 		a.emitToast("success", "配置已重新加载")
 		return nil
 	}
@@ -887,9 +904,7 @@ func (a *App) ReloadConfig() error {
 	if err != nil {
 		return err
 	}
-	if a.hotkeyMgr != nil && !a.GetHotkeyStatus().Registered && cfg.Settings.Hotkey == prevHotkey {
-		a.applyHotkey(cfg.Settings.Hotkey, true)
-	}
+	a.syncHooks(cfg.Settings, true)
 	a.emitToast("success", "配置已重新加载")
 	return nil
 }

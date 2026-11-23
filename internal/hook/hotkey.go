@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -178,15 +179,28 @@ type HotkeyManager struct {
 	tid     uint32
 	done    chan struct{}
 	reqCh   chan *hotkeyUpdateReq
+
+	// active holds the hotkey spec that is registered right now, or "" when none is. Only the
+	// hook thread stores to it; any goroutine may read it through ActiveSpec.
+	active atomic.Value // string
 }
 
 // NewHotkeyManager creates a HotkeyManager that invokes onTrigger asynchronously
 // whenever the registered hotkey is pressed.
 func NewHotkeyManager(onTrigger func()) *HotkeyManager {
-	return &HotkeyManager{
+	h := &HotkeyManager{
 		onTrigger: onTrigger,
 		reqCh:     make(chan *hotkeyUpdateReq, 1),
 	}
+	h.active.Store("")
+	return h
+}
+
+// ActiveSpec returns the hotkey spec that is registered at the moment, or "" when none is.
+// After a failed Update it tells which hotkey, if any, is still live.
+func (h *HotkeyManager) ActiveSpec() string {
+	spec, _ := h.active.Load().(string)
+	return spec
 }
 
 // Start spawns the dedicated OS-locked message loop thread and registers spec if non-empty.
@@ -221,6 +235,8 @@ func (h *HotkeyManager) startLocked(spec string) error {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 		defer close(done)
+		// Whatever way the loop ends nothing stays registered; publish that before done is closed.
+		defer h.active.Store("")
 
 		// Force creation of this thread's message queue before accepting PostThreadMessageW.
 		var msg winMSG
@@ -242,6 +258,7 @@ func (h *HotkeyManager) startLocked(spec string) error {
 			}
 			activeSpec = spec
 			registered = true
+			h.active.Store(activeSpec)
 		}
 
 		tidReady <- tid
@@ -273,6 +290,8 @@ func (h *HotkeyManager) startLocked(spec string) error {
 					continue
 				}
 				err := applyHotkeyUpdate(req.spec, &activeSpec, &registered)
+				// Publish before answering, so ActiveSpec is up to date once Update returns.
+				h.active.Store(activeSpec)
 				req.resp <- err
 			case WM_QUIT:
 				if registered {
@@ -316,13 +335,16 @@ func applyHotkeyUpdate(newSpec string, activeSpec *string, registered *bool) err
 	}
 
 	if err := registerHotKey(hotkeyID, mods, vk); err != nil {
+		// Fall back to the previous hotkey. If that one is taken too, nothing is registered.
 		if *activeSpec != "" {
 			if prevMods, prevVK, pErr := ParseHotkey(*activeSpec); pErr == nil {
 				if rErr := registerHotKey(hotkeyID, prevMods, prevVK); rErr == nil {
 					*registered = true
+					return err
 				}
 			}
 		}
+		*activeSpec = ""
 		return err
 	}
 

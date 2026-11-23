@@ -273,3 +273,86 @@ func TestMouseHookManagerLifecycle(t *testing.T) {
 		t.Errorf("goroutine count increased from %d to %d after Stop", baseGoroutines, after)
 	}
 }
+
+func TestHotkeyManagerActiveSpec(t *testing.T) {
+	const first = "Ctrl+Alt+Shift+F21"
+	const second = "Ctrl+Alt+Shift+F22"
+
+	hm := NewHotkeyManager(func() {})
+	if got := hm.ActiveSpec(); got != "" {
+		t.Fatalf("ActiveSpec before Start = %q, want empty", got)
+	}
+
+	if err := hm.Start(first); err != nil {
+		t.Skipf("cannot register %s on this machine: %v", first, err)
+	}
+	defer hm.Stop()
+	if got := hm.ActiveSpec(); got != first {
+		t.Fatalf("ActiveSpec after Start = %q, want %q", got, first)
+	}
+
+	if err := hm.Update(second); err != nil {
+		t.Fatalf("Update to %s failed: %v", second, err)
+	}
+	if got := hm.ActiveSpec(); got != second {
+		t.Fatalf("ActiveSpec after Update = %q, want %q", got, second)
+	}
+
+	// A hotkey that cannot be registered leaves the previous one in place.
+	if err := hm.Update("invalid+key"); err == nil {
+		t.Fatal("Update with an invalid spec unexpectedly succeeded")
+	}
+	if got := hm.ActiveSpec(); got != second {
+		t.Fatalf("ActiveSpec after a rejected Update = %q, want %q", got, second)
+	}
+
+	if err := hm.Update(""); err != nil {
+		t.Fatalf("Update to empty failed: %v", err)
+	}
+	if got := hm.ActiveSpec(); got != "" {
+		t.Fatalf("ActiveSpec after clearing = %q, want empty", got)
+	}
+
+	// Register again so that Stop has something to release.
+	if err := hm.Update(first); err != nil {
+		t.Fatalf("Update back to %s failed: %v", first, err)
+	}
+	hm.Stop()
+	if got := hm.ActiveSpec(); got != "" {
+		t.Fatalf("ActiveSpec after Stop = %q, want empty", got)
+	}
+}
+
+func TestHotkeyManagerKeepsPreviousHotkeyWhenSwitchFails(t *testing.T) {
+	const held = "Ctrl+Alt+Shift+F21"
+	const current = "Ctrl+Alt+Shift+F22"
+
+	other := NewHotkeyManager(func() {})
+	if err := other.Start(held); err != nil {
+		t.Skipf("cannot register %s on this machine: %v", held, err)
+	}
+	defer other.Stop()
+
+	hm := NewHotkeyManager(func() {})
+	defer hm.Stop()
+	if err := hm.Start(current); err != nil {
+		t.Skipf("cannot register %s on this machine: %v", current, err)
+	}
+
+	if err := hm.Update(held); err == nil {
+		t.Fatal("Update to a hotkey held by another manager unexpectedly succeeded")
+	}
+	if got := hm.ActiveSpec(); got != current {
+		t.Fatalf("ActiveSpec after a failed switch = %q, want %q", got, current)
+	}
+
+	// The previous hotkey must really be live again: nobody else can take it.
+	mods, vk, err := ParseHotkey(current)
+	if err != nil {
+		t.Fatalf("ParseHotkey(%q) failed: %v", current, err)
+	}
+	if err := registerHotKey(99, mods, vk); err == nil {
+		unregisterHotKey(99)
+		t.Fatalf("previous hotkey %s is no longer registered after a failed switch", current)
+	}
+}

@@ -36,12 +36,10 @@
 - 最新用户指令和适用的仓库明确规则按各自权限层级执行，既有授权在原适用范围内继续有效。
 - 本文件不新增审批，也不扩大授权；仅完成计划、创建本地提交或标记归档都不产生后续操作授权。
 
-该 Skill 尚未安装到 Agent 的 skills 目录，按实际位置读取（2026-11-24 核实，路径变化时更新本表）：
-
-| 文件 | 位置 |
-| --- | --- |
-| `SKILL.md` | `F:\Codes\git_cooperation\Git协作和工程规范\SKILLS\中小工程Git工作流Skills\git-small-project-workflow\SKILL.md` |
-| `references/task-records.md` | 同目录下 `references\task-records.md` |
+该 Skill 的项目内副本在 `.agents/skills/git-small-project-workflow/`（`SKILL.md` 与
+`references/task-records.md`）。`.agents/` 不纳入版本管理，新克隆里没有它时，从
+`Git协作和工程规范` 仓库的 `SKILLS/中小工程Git工作流Skills/git-small-project-workflow/` 复制整个目录；
+该仓库在本机的位置是 `F:\Codes\git_cooperation\Git协作和工程规范`。
 
 ## 项目约定
 
@@ -53,7 +51,7 @@
 | 债务 | 根目录 `TODO.md`（Skill 默认），出现已确认债务时创建，目前不存在。 |
 | 任务记录 | 见[复杂任务记录与归档](#复杂任务记录与归档)。 |
 | 正式文档 | 尚无 README 及接口、配置、架构、部署文档。当前事实以代码为准：配置结构见 `internal/config/schema.go`；后端绑定见 `app.go` 的导出方法与 `frontend/src/api/bridge.ts` 的 `WailsGoApp` 接口。 |
-| 发布与运行 | 目标环境是 Windows 桌面会话。截至 2026-11-24 没有远程仓库、CI 和发布流程；Push、Tag、Release、部署按 Skill 需用户明确授权。 |
+| 发布与运行 | 目标环境是 Windows 桌面会话。远程仓库是 `origin`（`https://github.com/banned104/JeeDesk.git`，2026-11-24 添加），没有 CI 和发布流程。Push、Tag、Release、部署按 Skill 需用户明确授权；推送前先过一遍[不上传的本地内容](#不上传的本地内容)。 |
 
 ## 构建与验证
 
@@ -96,5 +94,18 @@
   （`_scratch/_done_YYYYMMDD-short-topic/`），并修正指向旧路径的链接。
   阶段完成、计划写完、会话结束都不等于整体完成；后续阶段待授权时保持活动目录并注明恢复条件。
 - 任务目标本身只是交付计划时，才可按“计划交付完成”归档，不能据此暗示产品已经实现。
-- Git 跟踪策略：`_scratch` 未被 `.gitignore` 忽略。脱敏后的计划、进度和专题文档默认纳入版本管理，
-  提交时逐个文件精确暂存；临时程序、缓存、大日志、安装包、真实数据、个人配置和秘密不提交。
+- Git 跟踪策略：整个 `_scratch/` 被 `.gitignore` 忽略，只在本地维护，不提交、不推送，也不强制添加。
+  这是本项目对 Skill 默认策略（任务文本纳入版本管理）的明确例外，由用户于 2026-11-24 确定。
+  需要长期保留或共享的结论与证据摘要写入受版本管理的文档（`CHANGELOG.md`、`AGENTS.md`、`TODO.md`），
+  并在进度中链接。
+
+## 不上传的本地内容
+
+`.agents/` 与 `_scratch/` 只留在本地：不进文件树，也不留在提交历史里。这是用户于 2026-11-24
+明确的项目例外，为此可以不按 Skill 的默认做法处理（`_scratch` 默认入库、不改写历史）。
+
+- 两者都已在 `.gitignore` 中忽略。不使用 `git add -f`，不删改这两条忽略规则。
+- 推送前逐项确认，任一有输出就先处理：
+  - `git ls-files -- .agents _scratch`
+  - `git log --oneline origin/main..HEAD -- .agents _scratch`（首次推送改用 `--all`）
+- 提交历史中已经出现这两类路径时，推送前先把它们从历史中移除。

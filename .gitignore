@@ -10,3 +10,7 @@ build/bin/
 # Frontend dependencies & build
 frontend/node_modules/
 frontend/dist/
+
+# Local only: project skills and task records are never committed or pushed
+.agents/
+_scratch/

@@ -30,6 +30,11 @@ body,
   --wails-drop-target: drop;
 }
 
+/* Visual cue while a file is dragged over the window */
+.wails-drop-zone.wails-drop-target-active {
+  box-shadow: inset 0 0 0 2px rgba(56, 189, 248, 0.55);
+}
+
 /* Frosted glass surface */
 .glass-panel {
   background: rgba(18, 22, 32, 0.72);

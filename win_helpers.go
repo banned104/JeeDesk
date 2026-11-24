@@ -11,6 +11,8 @@ import (
 
 var (
 	modUser32                 = windows.NewLazySystemDLL("user32.dll")
+	modDwmapi                 = windows.NewLazySystemDLL("dwmapi.dll")
+	procDwmSetWindowAttribute = modDwmapi.NewProc("DwmSetWindowAttribute")
 	procEnumWindows           = modUser32.NewProc("EnumWindows")
 	procGetClassNameW         = modUser32.NewProc("GetClassNameW")
 	procIsWindowVisible       = modUser32.NewProc("IsWindowVisible")
@@ -181,6 +183,30 @@ func focusWindowHandle(hwnd uintptr) {
 	procSetWindowPos.Call(hwnd, hwndTopmost, 0, 0, 0, 0, swpNoMove|swpNoSize|swpShowWindow)
 	procBringWindowToTop.Call(hwnd)
 	procSetForegroundWindow.Call(hwnd)
+}
+
+// DWMWA_WINDOW_CORNER_PREFERENCE = 33 (Windows 11 22H2+); DWMWCP_ROUND = 2.
+const (
+	dwmwaWindowCornerPreference = 33
+	dwmwcpRound                 = 2
+)
+
+// roundWindowCorners asks DWM to round the window's corners. Frameless windows
+// get square corners by default, which leaves the acrylic backdrop visible
+// behind the panel's rounded CSS corners. Errors are ignored: on Windows 10 and
+// older Windows 11 builds the attribute is unsupported and the window keeps
+// square corners.
+func roundWindowCorners(hwnd uintptr) {
+	if hwnd == 0 {
+		return
+	}
+	preference := int32(dwmwcpRound)
+	procDwmSetWindowAttribute.Call(
+		hwnd,
+		dwmwaWindowCornerPreference,
+		uintptr(unsafe.Pointer(&preference)),
+		unsafe.Sizeof(preference),
+	)
 }
 
 // showWarningMessageBox displays a non-crashing top-most warning dialog on Windows.

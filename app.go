@@ -237,9 +237,12 @@ func (a *App) domReady(_ context.Context) {
 	a.startBlurMonitor()
 
 	go func() {
-		if a.findMainHwndFn != nil && a.focusWindowFn != nil {
+		if a.findMainHwndFn != nil {
 			if hwnd := a.findMainHwndFn(); hwnd != 0 {
-				a.focusWindowFn(hwnd)
+				roundWindowCorners(hwnd)
+				if a.focusWindowFn != nil {
+					a.focusWindowFn(hwnd)
+				}
 			}
 		}
 	}()

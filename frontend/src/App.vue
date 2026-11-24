@@ -386,9 +386,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="w-screen h-screen p-0.5 select-none">
+  <div class="w-screen h-screen select-none wails-drop-zone">
     <div
-      class="w-full h-full rounded-2xl glass-panel border border-white/10 shadow-glass flex flex-col overflow-hidden"
+      class="w-full h-full rounded-lg glass-panel border border-white/10 flex flex-col overflow-hidden"
     >
       <!-- Top Bar -->
       <TopBar

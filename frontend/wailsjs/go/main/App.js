@@ -14,6 +14,14 @@ export function AddItem(arg1, arg2) {
   return window['go']['main']['App']['AddItem'](arg1, arg2);
 }
 
+export function ApplyWindowState() {
+  return window['go']['main']['App']['ApplyWindowState']();
+}
+
+export function ClearRecentItems() {
+  return window['go']['main']['App']['ClearRecentItems']();
+}
+
 export function DeleteGroup(arg1) {
   return window['go']['main']['App']['DeleteGroup'](arg1);
 }
@@ -22,24 +30,68 @@ export function DeleteItem(arg1, arg2) {
   return window['go']['main']['App']['DeleteItem'](arg1, arg2);
 }
 
+export function ExportConfig() {
+  return window['go']['main']['App']['ExportConfig']();
+}
+
+export function GetAppInfo() {
+  return window['go']['main']['App']['GetAppInfo']();
+}
+
 export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
+}
+
+export function GetConfigError() {
+  return window['go']['main']['App']['GetConfigError']();
 }
 
 export function GetHotkeyStatus() {
   return window['go']['main']['App']['GetHotkeyStatus']();
 }
 
+export function GetRecentItems(arg1) {
+  return window['go']['main']['App']['GetRecentItems'](arg1);
+}
+
+export function GetUndoLabel() {
+  return window['go']['main']['App']['GetUndoLabel']();
+}
+
+export function HasUndo() {
+  return window['go']['main']['App']['HasUndo']();
+}
+
 export function HideWindow() {
   return window['go']['main']['App']['HideWindow']();
+}
+
+export function ImportConfig() {
+  return window['go']['main']['App']['ImportConfig']();
+}
+
+export function ImportStartMenuItems(arg1, arg2) {
+  return window['go']['main']['App']['ImportStartMenuItems'](arg1, arg2);
 }
 
 export function LaunchItem(arg1, arg2) {
   return window['go']['main']['App']['LaunchItem'](arg1, arg2);
 }
 
+export function MoveGroup(arg1, arg2) {
+  return window['go']['main']['App']['MoveGroup'](arg1, arg2);
+}
+
+export function MoveItem(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['MoveItem'](arg1, arg2, arg3, arg4);
+}
+
 export function OnWindowBlur() {
   return window['go']['main']['App']['OnWindowBlur']();
+}
+
+export function OpenBaseDir() {
+  return window['go']['main']['App']['OpenBaseDir']();
 }
 
 export function OpenConfigFile() {
@@ -70,12 +122,32 @@ export function RenameGroup(arg1, arg2) {
   return window['go']['main']['App']['RenameGroup'](arg1, arg2);
 }
 
+export function ResetWindowState() {
+  return window['go']['main']['App']['ResetWindowState']();
+}
+
 export function SaveSettings(arg1) {
   return window['go']['main']['App']['SaveSettings'](arg1);
 }
 
+export function SaveWindowState() {
+  return window['go']['main']['App']['SaveWindowState']();
+}
+
+export function ScanStartMenu() {
+  return window['go']['main']['App']['ScanStartMenu']();
+}
+
+export function SearchItems(arg1) {
+  return window['go']['main']['App']['SearchItems'](arg1);
+}
+
 export function SetActiveGroup(arg1) {
   return window['go']['main']['App']['SetActiveGroup'](arg1);
+}
+
+export function SetAutoStart(arg1) {
+  return window['go']['main']['App']['SetAutoStart'](arg1);
 }
 
 export function ShowWindow() {
@@ -84,6 +156,14 @@ export function ShowWindow() {
 
 export function ToggleWindow() {
   return window['go']['main']['App']['ToggleWindow']();
+}
+
+export function UndoDeleteGroup() {
+  return window['go']['main']['App']['UndoDeleteGroup']();
+}
+
+export function UndoDeleteItem() {
+  return window['go']['main']['App']['UndoDeleteItem']();
 }
 
 export function UpdateItem(arg1, arg2) {

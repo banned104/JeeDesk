@@ -189,6 +189,26 @@ func TestShellExecuteError(t *testing.T) {
 	}
 }
 
+func TestFindPowerShellUsesSystemRootCopyWhenNotOnPath(t *testing.T) {
+	root := t.TempDir()
+	winPS := filepath.Join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+	if err := os.MkdirAll(filepath.Dir(winPS), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(winPS, []byte("stub"), 0o644); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+
+	// ShellExecuteW resolves a bare name through PATH again, so a PATH without PowerShell needs
+	// the full path to the copy under SystemRoot.
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("SystemRoot", root)
+
+	if got := findPowerShell(); got != winPS {
+		t.Fatalf("findPowerShell() = %q, want %q", got, winPS)
+	}
+}
+
 func TestOpenFolderAndSelectAndOpenFileValidation(t *testing.T) {
 	if err := Launch("", "", ""); err == nil {
 		t.Fatal("Launch(\"\") expected error, got nil")

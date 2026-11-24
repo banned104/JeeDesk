@@ -230,7 +230,7 @@ func findPowerShell() string {
 	if sysRoot := os.Getenv("SystemRoot"); sysRoot != "" {
 		winPS := filepath.Join(sysRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
 		if info, err := os.Stat(winPS); err == nil && !info.IsDir() {
-			return "powershell.exe"
+			return winPS
 		}
 	}
 	if existsInPath("pwsh.exe") {

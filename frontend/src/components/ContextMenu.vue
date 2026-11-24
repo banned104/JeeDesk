@@ -60,12 +60,25 @@ function handlePointerDown(event: MouseEvent) {
   }
 }
 
+// The menu is anchored to viewport coordinates, so any scroll or resize would leave it pointing at
+// the wrong place. Closing is cheaper and less surprising than re-positioning it.
+function handleViewportChange() {
+  if (props.visible) {
+    emit('close');
+  }
+}
+
 onMounted(() => {
   window.addEventListener('mousedown', handlePointerDown);
+  // Capture phase also sees scrolls of inner scroll containers, which do not bubble.
+  window.addEventListener('scroll', handleViewportChange, true);
+  window.addEventListener('resize', handleViewportChange);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('mousedown', handlePointerDown);
+  window.removeEventListener('scroll', handleViewportChange, true);
+  window.removeEventListener('resize', handleViewportChange);
 });
 </script>
 

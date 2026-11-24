@@ -1,10 +1,27 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
+import { bridge } from '../api/bridge';
+import { registerTranslations, t } from '../i18n';
 
-defineProps<{
+registerTranslations({
+  '搜索项目…（/）': 'Search items… (/)',
+  '搜索项目': 'Search items',
+  '清除搜索': 'Clear search',
+  '手动添加项目': 'Add an item manually',
+  '添加': 'Add',
+  '设置': 'Settings',
+  '隐藏窗口': 'Hide window',
+  '搜索结果': 'Search results',
+  '浏览器 mock': 'Browser mock',
+});
+
+const props = defineProps<{
   searchQuery: string;
   activeGroupName?: string;
+  /** Items currently on screen: the hits while searching, otherwise the active group's items. */
   itemCount?: number;
+  /** Items in the whole config, used as the denominator while searching. */
+  totalCount?: number;
 }>();
 
 const emit = defineEmits<{
@@ -15,6 +32,20 @@ const emit = defineEmits<{
 }>();
 
 const searchInputRef = ref<HTMLInputElement | null>(null);
+
+// Outside the Wails runtime the bridge answers from an in-memory mock. Saying so on screen stops a
+// mock-only defect (or a mock-only success) from being taken for real behaviour.
+const isMock = !bridge.isWails();
+
+const searchActive = computed(() => props.searchQuery.trim().length > 0);
+
+// E7: while searching the badge states "hits / total", otherwise just the count.
+const countText = computed(() => {
+  if (searchActive.value) {
+    return `${props.itemCount ?? 0} / ${props.totalCount ?? 0}`;
+  }
+  return `${props.itemCount ?? 0}`;
+});
 
 // App.vue drives "type anywhere" and the "/" shortcut through these two methods.
 function focusSearch() {
@@ -43,11 +74,18 @@ defineExpose({ focusSearch, blurSearch });
       </div>
       <span class="text-sm font-semibold tracking-wide jd-text">JeeDesk</span>
       <span
-        v-if="activeGroupName"
-        class="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] jd-surface-soft jd-muted border jd-border truncate max-w-[140px]"
+        v-if="isMock"
+        class="px-1.5 py-0.5 rounded text-[10px] font-semibold tracking-wider uppercase bg-amber-500/20 text-amber-300 border border-amber-400/30"
+        :title="t('浏览器 mock')"
       >
-        <span class="truncate">{{ activeGroupName }}</span>
-        <span v-if="typeof itemCount === 'number'" class="jd-subtle">· {{ itemCount }}</span>
+        mock
+      </span>
+      <span
+        v-if="activeGroupName || searchActive"
+        class="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] jd-surface-soft jd-muted border jd-border truncate max-w-[180px]"
+      >
+        <span class="truncate">{{ searchActive ? t('搜索结果') : activeGroupName }}</span>
+        <span v-if="typeof itemCount === 'number'" class="jd-subtle whitespace-nowrap">· {{ countText }}</span>
       </span>
     </div>
 
@@ -61,6 +99,7 @@ defineExpose({ focusSearch, blurSearch });
           fill="none"
           stroke="currentColor"
           stroke-width="2"
+          aria-hidden="true"
         >
           <circle cx="11" cy="11" r="7" />
           <path stroke-linecap="round" d="M20 20l-3.5-3.5" />
@@ -69,18 +108,27 @@ defineExpose({ focusSearch, blurSearch });
           ref="searchInputRef"
           :value="searchQuery"
           type="text"
-          placeholder="搜索项目…（/）"
+          :placeholder="t('搜索项目…（/）')"
+          :aria-label="t('搜索项目')"
           class="w-36 sm:w-44 h-7 pl-7 pr-6 rounded-lg jd-input border text-xs transition-all"
           @input="emit('update:searchQuery', ($event.target as HTMLInputElement).value)"
         />
         <button
           v-if="searchQuery"
           type="button"
-          title="清除搜索"
+          :aria-label="t('清除搜索')"
+          :title="t('清除搜索')"
           class="absolute right-1.5 p-0.5 rounded jd-subtle jd-hover transition-colors"
           @click="emit('update:searchQuery', '')"
         >
-          <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+          <svg
+            class="w-3 h-3"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.2"
+            aria-hidden="true"
+          >
             <path stroke-linecap="round" d="M18 6L6 18M6 6l12 12" />
           </svg>
         </button>
@@ -89,24 +137,40 @@ defineExpose({ focusSearch, blurSearch });
       <!-- Add Item -->
       <button
         type="button"
-        title="手动添加项目"
+        :aria-label="t('手动添加项目')"
+        :title="t('手动添加项目')"
         class="h-7 px-2 rounded-lg flex items-center gap-1 text-xs jd-muted jd-hover border border-transparent transition-all"
         @click="emit('addItem')"
       >
-        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+        <svg
+          class="w-3.5 h-3.5"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.2"
+          aria-hidden="true"
+        >
           <path stroke-linecap="round" d="M12 5v14M5 12h14" />
         </svg>
-        <span class="hidden sm:inline">添加</span>
+        <span class="hidden sm:inline">{{ t('添加') }}</span>
       </button>
 
       <!-- Settings -->
       <button
         type="button"
-        title="设置"
+        :aria-label="t('设置')"
+        :title="t('设置')"
         class="w-7 h-7 rounded-lg flex items-center justify-center jd-muted jd-hover border border-transparent transition-all"
         @click="emit('openSettings')"
       >
-        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+        <svg
+          class="w-4 h-4"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.9"
+          aria-hidden="true"
+        >
           <path
             stroke-linecap="round"
             stroke-linejoin="round"
@@ -119,11 +183,19 @@ defineExpose({ focusSearch, blurSearch });
       <!-- Hide / Close -->
       <button
         type="button"
-        title="隐藏窗口 (Esc)"
+        :aria-label="t('隐藏窗口')"
+        :title="t('隐藏窗口') + ' (Esc)'"
         class="w-7 h-7 rounded-lg flex items-center justify-center jd-muted hover:text-rose-200 hover:bg-rose-500/20 border border-transparent hover:border-rose-400/20 transition-all"
         @click="emit('hide')"
       >
-        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <svg
+          class="w-4 h-4"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          aria-hidden="true"
+        >
           <path stroke-linecap="round" d="M18 6L6 18M6 6l12 12" />
         </svg>
       </button>

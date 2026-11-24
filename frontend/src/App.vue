@@ -16,6 +16,7 @@ import type {
   ToastPayload,
 } from './types/config';
 import { RECENT_GROUP_ID, defaultSettings } from './types/config';
+import { registerTranslations, setLanguage, t } from './i18n';
 import TopBar from './components/TopBar.vue';
 import GroupSidebar from './components/GroupSidebar.vue';
 import ItemGrid from './components/ItemGrid.vue';
@@ -26,7 +27,78 @@ import GroupModal from './components/GroupModal.vue';
 import StartMenuImportModal from './components/StartMenuImportModal.vue';
 import ToastContainer from './components/ToastContainer.vue';
 
+registerTranslations({
+  最近使用: 'Recent',
+  启动: 'Launch',
+  编辑: 'Edit',
+  取消管理员身份运行: 'Stop running as administrator',
+  以管理员身份运行: 'Run as administrator',
+  打开所在文件夹: 'Open containing folder',
+  复制目标路径: 'Copy target path',
+  上移: 'Move up',
+  下移: 'Move down',
+  删除: 'Delete',
+  重命名分组: 'Rename group',
+  分组上移: 'Move group up',
+  分组下移: 'Move group down',
+  删除分组: 'Delete group',
+  未命名分组: 'Untitled group',
+  '搜索失败: {error}': 'Search failed: {error}',
+  '启动失败: {error}': 'Launch failed: {error}',
+  已取消管理员身份运行: 'Administrator mode turned off',
+  已设为以管理员身份运行: 'Administrator mode turned on',
+  已复制目标路径: 'Target path copied',
+  '{label}（Ctrl+Z）': '{label} (Ctrl+Z)',
+  '操作失败: {error}': 'Action failed: {error}',
+  请先创建一个分组: 'Create a group first',
+  '保存项目失败: {error}': 'Saving the item failed: {error}',
+  请先创建一个分组再拖入文件: 'Create a group before dropping files',
+  '添加拖入文件失败: {error}': 'Adding the dropped files failed: {error}',
+  '分组操作失败: {error}': 'Group action failed: {error}',
+  '保存设置失败: {error}': 'Saving the settings failed: {error}',
+  '配置已导出到 {target}': 'Configuration exported to {target}',
+  '导出失败: {error}': 'Export failed: {error}',
+  '已导入 {count} 个分组': 'Imported {count} groups',
+  '导入失败: {error}': 'Import failed: {error}',
+  '重载配置失败: {error}': 'Reloading the configuration failed: {error}',
+  '打开配置文件失败: {error}': 'Opening config.json failed: {error}',
+  '打开数据目录失败: {error}': 'Opening the data folder failed: {error}',
+  已重置窗口位置和大小: 'Window position and size reset',
+  '重置失败: {error}': 'Reset failed: {error}',
+  '已移动到「{name}」': 'Moved to "{name}"',
+  '移动失败: {error}': 'Moving failed: {error}',
+  最近记录已清空: 'Recent items cleared',
+  '清空失败: {error}': 'Clearing failed: {error}',
+  '扫描开始菜单失败: {error}': 'Scanning the Start Menu failed: {error}',
+  请先选择一个分组: 'Select a group first',
+  '已恢复「{name}」': 'Restored "{name}"',
+  没有可撤销的删除: 'Nothing to undo',
+  '撤销失败: {error}': 'Undo failed: {error}',
+  '删除失败: {error}': 'Delete failed: {error}',
+  '保存分组折叠状态失败: {error}': 'Saving the folded groups failed: {error}',
+  '配置文件异常: {error}': 'Configuration problem: {error}',
+  '打开 config.json': 'Open config.json',
+  关闭提示: 'Dismiss notification',
+  '加载配置失败: {error}': 'Loading the configuration failed: {error}',
+  'config.json 解析错误': 'config.json could not be parsed',
+  'config.json 已被删除，当前仍在用内存中的配置':
+    'config.json was deleted; the in-memory configuration is still in use',
+  重建配置文件: 'Rebuild config file',
+  打开数据目录: 'Open data folder',
+  '已重建 config.json': 'config.json rebuilt',
+  '重建配置文件失败: {error}': 'Rebuilding config.json failed: {error}',
+  关闭横幅: 'Dismiss banner',
+  '(未注册)': '(not registered)',
+  '{count} 个分组': '{count} groups',
+  '{count} 个结果': '{count} results',
+  导入: 'Import',
+  导入开始菜单: 'Import from Start Menu',
+});
+
 const SEARCH_DEBOUNCE_MS = 120;
+// D13: how long an item stays "launching" after its launch call settles, so the second click of a
+// double click cannot send a second launch request.
+const LAUNCH_GUARD_MS = 400;
 const RECENT_LIMIT = 12;
 
 const config = reactive<Config>({
@@ -48,6 +120,15 @@ const iconCacheBuster = ref(Date.now());
 const configError = ref('');
 const undoLabel = ref('');
 
+// D11: the first frame must not claim the list is empty before getConfig() has answered.
+const configReady = ref(false);
+// D13: entries whose launch is in flight, so a fast double click only launches once.
+const launchingIds = ref<Set<string>>(new Set());
+// C7: item IDs whose target file is gone, so the grid can mark them.
+const missingTargets = ref<Set<string>>(new Set());
+// E10: config.json was deleted while the app is running; a banner offers the recovery action.
+const configRemoved = ref(false);
+
 const topBarRef = ref<InstanceType<typeof TopBar> | null>(null);
 const gridRef = ref<InstanceType<typeof ItemGrid> | null>(null);
 
@@ -65,6 +146,8 @@ const startMenuModal = reactive<{
   loading: boolean;
   entries: StartMenuEntry[];
 }>({ visible: false, loading: false, entries: [] });
+// A confirmation dialog, once shown, also counts as a modal for the backend hint below.
+const confirmOpen = ref(false);
 
 // Context Menu
 const contextMenu = reactive<{
@@ -82,9 +165,24 @@ let toastSeq = 0;
 
 const activeGroup = computed<Group | undefined>(() => config.groups.find((g) => g.id === activeGroupId.value));
 const isRecentView = computed(() => activeGroupId.value === RECENT_GROUP_ID);
-const activeGroupName = computed(() => (isRecentView.value ? '最近使用' : activeGroup.value?.name ?? ''));
+const activeGroupName = computed(() => (isRecentView.value ? t('最近使用') : activeGroup.value?.name ?? ''));
 const hasActiveGroup = computed(() => Boolean(activeGroup.value));
 const isSearching = computed(() => searchQuery.value.trim().length > 0);
+const totalItemCount = computed(() =>
+  config.groups.reduce((sum, group) => sum + (group.items?.length ?? 0), 0)
+);
+const collapsedGroupIds = computed<string[]>(() => {
+  const ids = config.settings.collapsed_groups;
+  return Array.isArray(ids) ? ids : [];
+});
+// F3: a folded group still shows how many hits it holds while searching.
+const searchHitCounts = computed<Record<string, number>>(() => {
+  const counts: Record<string, number> = {};
+  for (const hit of searchHits.value) {
+    counts[hit.group_id] = (counts[hit.group_id] ?? 0) + 1;
+  }
+  return counts;
+});
 
 const displayItems = computed<DisplayItem[]>(() => {
   if (isSearching.value) {
@@ -129,29 +227,51 @@ const gridMode = computed<'group' | 'search' | 'recent'>(() => {
   return 'group';
 });
 
+// Any dialog on screen keeps the window from hiding itself on blur (file pickers, alt-tab).
+const anyModalOpen = computed(
+  () =>
+    settingsOpen.value ||
+    itemModal.visible ||
+    groupModal.visible ||
+    startMenuModal.visible ||
+    contextMenu.visible ||
+    confirmOpen.value
+);
+
+watch(
+  anyModalOpen,
+  (open) => {
+    void bridge.setModalOpen(open).catch(() => undefined);
+  },
+  { flush: 'post' }
+);
+
 const contextMenuItems = computed<ContextMenuItem[]>(() => {
   if (contextMenu.targetType === 'item' && contextMenu.entry) {
     const entry = contextMenu.entry;
     const items: ContextMenuItem[] = [
-      { id: 'launch', label: '启动', icon: 'edit' },
-      { id: 'edit-item', label: '编辑', icon: 'edit' },
-      { id: 'toggle-admin', label: entry.item.admin ? '取消管理员身份运行' : '以管理员身份运行' },
-      { id: 'open-location', label: '打开所在文件夹', icon: 'folder' },
-      { id: 'copy-path', label: '复制目标路径' },
+      { id: 'launch', label: t('启动'), icon: 'edit' },
+      { id: 'edit-item', label: t('编辑'), icon: 'edit' },
+      {
+        id: 'toggle-admin',
+        label: entry.item.admin ? t('取消管理员身份运行') : t('以管理员身份运行'),
+      },
+      { id: 'open-location', label: t('打开所在文件夹'), icon: 'folder' },
+      { id: 'copy-path', label: t('复制目标路径') },
     ];
     if (entry.groupId === activeGroupId.value) {
-      items.push({ id: 'move-up', label: '上移' });
-      items.push({ id: 'move-down', label: '下移' });
+      items.push({ id: 'move-up', label: t('上移') });
+      items.push({ id: 'move-down', label: t('下移') });
     }
-    items.push({ id: 'delete-item', label: '删除', icon: 'trash', danger: true, dividerBefore: true });
+    items.push({ id: 'delete-item', label: t('删除'), icon: 'trash', danger: true, dividerBefore: true });
     return items;
   }
   if (contextMenu.targetType === 'group' && contextMenu.group) {
     return [
-      { id: 'rename-group', label: '重命名分组', icon: 'rename' },
-      { id: 'group-up', label: '分组上移' },
-      { id: 'group-down', label: '分组下移' },
-      { id: 'delete-group', label: '删除分组', icon: 'trash', danger: true, dividerBefore: true },
+      { id: 'rename-group', label: t('重命名分组'), icon: 'rename' },
+      { id: 'group-up', label: t('分组上移') },
+      { id: 'group-down', label: t('分组下移') },
+      { id: 'delete-group', label: t('删除分组'), icon: 'trash', danger: true, dividerBefore: true },
     ];
   }
   return [];
@@ -165,7 +285,7 @@ function showToast(payload: ToastPayload) {
 }
 
 function dismissToast(id: number) {
-  toasts.value = toasts.value.filter((t) => t.id !== id);
+  toasts.value = toasts.value.filter((item) => item.id !== id);
 }
 
 function errorText(err: unknown): string {
@@ -214,6 +334,9 @@ function applyConfig(next: Config) {
   config.groups = Array.isArray(next.groups) ? next.groups : [];
   iconCacheBuster.value = Date.now();
   configError.value = '';
+  // The file exists again (or was never the problem) once a usable config arrives.
+  configRemoved.value = false;
+  setLanguage(settings.language);
 
   const stillExists =
     activeGroupId.value === RECENT_GROUP_ID || config.groups.some((g) => g.id === activeGroupId.value);
@@ -225,6 +348,7 @@ function applyConfig(next: Config) {
 
   void refreshRecent();
   void refreshUndoLabel();
+  void refreshMissingTargets();
 }
 
 function selectGroup(groupId: string, options: { silent?: boolean } = {}) {
@@ -258,6 +382,15 @@ async function refreshUndoLabel() {
   }
 }
 
+/** C7 refreshes the set of broken targets; config changes can fix or break any of them. */
+async function refreshMissingTargets() {
+  try {
+    missingTargets.value = new Set(await bridge.getMissingTargets());
+  } catch {
+    missingTargets.value = new Set();
+  }
+}
+
 let searchTimer = 0;
 
 function handleSearchInput(value: string) {
@@ -275,7 +408,7 @@ function handleSearchInput(value: string) {
       searchHits.value = await bridge.searchItems(value);
     } catch (err) {
       searchHits.value = [];
-      showToast({ type: 'error', message: `搜索失败: ${errorText(err)}` });
+      showToast({ type: 'error', message: t('搜索失败: {error}', { error: errorText(err) }) });
     } finally {
       searching.value = false;
     }
@@ -284,12 +417,29 @@ function handleSearchInput(value: string) {
 
 // --- launching ------------------------------------------------------------
 
+function entryKey(entry: DisplayItem): string {
+  return `${entry.groupId}:${entry.item.id}`;
+}
+
 async function launchEntry(entry: DisplayItem) {
+  const key = entryKey(entry);
+  if (launchingIds.value.has(key)) return;
+  const inFlight = new Set(launchingIds.value);
+  inFlight.add(key);
+  launchingIds.value = inFlight;
+
   try {
     await bridge.launchItem(entry.groupId, entry.item.id);
     void refreshRecent();
   } catch (err) {
-    showToast({ type: 'error', message: `启动失败: ${errorText(err)}` });
+    showToast({ type: 'error', message: t('启动失败: {error}', { error: errorText(err) }) });
+  } finally {
+    // The guard outlives the call on purpose: a double click delivers its second event right after.
+    window.setTimeout(() => {
+      const remaining = new Set(launchingIds.value);
+      remaining.delete(key);
+      launchingIds.value = remaining;
+    }, LAUNCH_GUARD_MS);
   }
 }
 
@@ -355,7 +505,7 @@ async function handleContextMenuSelect(actionId: string) {
       await bridge.updateItem(entry.groupId, { ...entry.item, admin: !entry.item.admin });
       showToast({
         type: 'success',
-        message: entry.item.admin ? '已取消管理员身份运行' : '已设为以管理员身份运行',
+        message: entry.item.admin ? t('已取消管理员身份运行') : t('已设为以管理员身份运行'),
       });
       return;
     }
@@ -367,7 +517,7 @@ async function handleContextMenuSelect(actionId: string) {
 
     if (actionId === 'copy-path' && entry) {
       await navigator.clipboard.writeText(entry.item.path);
-      showToast({ type: 'success', message: '已复制目标路径' });
+      showToast({ type: 'success', message: t('已复制目标路径') });
       return;
     }
 
@@ -386,7 +536,7 @@ async function handleContextMenuSelect(actionId: string) {
       selectedIndex.value = Math.max(0, Math.min(selectedIndex.value, displayItems.value.length - 2));
       await refreshUndoLabel();
       if (undoLabel.value) {
-        showToast({ type: 'info', message: `${undoLabel.value}（Ctrl+Z）` });
+        showToast({ type: 'info', message: t('{label}（Ctrl+Z）', { label: undoLabel.value }) });
       }
       return;
     }
@@ -412,35 +562,67 @@ async function handleContextMenuSelect(actionId: string) {
       await bridge.deleteGroup(group.id);
       await refreshUndoLabel();
       if (undoLabel.value) {
-        showToast({ type: 'info', message: `${undoLabel.value}（Ctrl+Z）` });
+        showToast({ type: 'info', message: t('{label}（Ctrl+Z）', { label: undoLabel.value }) });
       }
     }
   } catch (err) {
-    showToast({ type: 'error', message: `操作失败: ${errorText(err)}` });
+    showToast({ type: 'error', message: t('操作失败: {error}', { error: errorText(err) }) });
   }
 }
 
 // --- items ----------------------------------------------------------------
 
+/**
+ * D7: an added item must be visible right away. A leftover search filter or another active group
+ * would hide it, so the grid goes back to the group the item landed in and scrolls to its end,
+ * where the new entry was appended.
+ */
+function revealItems(groupId: string) {
+  if (isSearching.value) {
+    handleSearchInput('');
+  }
+  if (groupId && groupId !== activeGroupId.value) {
+    selectGroup(groupId);
+  }
+  void nextTick(() => {
+    const group = config.groups.find((g) => g.id === groupId);
+    const total = group?.items?.length ?? 0;
+    if (total > 0) {
+      selectedIndex.value = total - 1;
+      void gridRef.value?.ensureSelectionVisible();
+    }
+  });
+  void refreshMissingTargets();
+}
+
 function openCreateItemModal() {
   if (!activeGroup.value) {
-    showToast({ type: 'warning', message: '请先创建一个分组' });
+    showToast({ type: 'warning', message: t('请先创建一个分组') });
+    openAddGroupModal();
     return;
   }
   itemModal.item = null;
   itemModal.visible = true;
 }
 
+/** The item dialog reports picker failures inline; the shell mirrors them once as a toast. */
+function handleItemModalError(message: string) {
+  if (message) {
+    showToast({ type: 'error', message });
+  }
+}
+
 async function handleSaveItem(request: ItemSaveRequest) {
   try {
     if (request.isNew) {
       await bridge.addItem(request.groupId, request.item);
+      revealItems(request.groupId);
     } else {
       await bridge.updateItem(request.groupId, request.item);
     }
     itemModal.visible = false;
   } catch (err) {
-    showToast({ type: 'error', message: `保存项目失败: ${errorText(err)}` });
+    showToast({ type: 'error', message: t('保存项目失败: {error}', { error: errorText(err) }) });
   } finally {
     // Always report back: on failure the modal stays open and must accept another attempt.
     request.done();
@@ -450,13 +632,15 @@ async function handleSaveItem(request: ItemSaveRequest) {
 async function handleDroppedPaths(paths: string[]) {
   const groupId = activeGroup.value?.id ?? config.groups[0]?.id;
   if (!groupId) {
-    showToast({ type: 'warning', message: '请先创建一个分组再拖入文件' });
+    showToast({ type: 'warning', message: t('请先创建一个分组再拖入文件') });
+    openAddGroupModal();
     return;
   }
   try {
     await bridge.addDroppedFiles(groupId, paths);
+    revealItems(groupId);
   } catch (err) {
-    showToast({ type: 'error', message: `添加拖入文件失败: ${errorText(err)}` });
+    showToast({ type: 'error', message: t('添加拖入文件失败: {error}', { error: errorText(err) }) });
   }
 }
 
@@ -480,7 +664,27 @@ async function handleGroupModalSubmit(name: string) {
     }
     groupModal.visible = false;
   } catch (err) {
-    showToast({ type: 'error', message: `分组操作失败: ${errorText(err)}` });
+    showToast({ type: 'error', message: t('分组操作失败: {error}', { error: errorText(err) }) });
+  }
+}
+
+/**
+ * F3: folding a group is persisted through the dedicated quiet endpoint instead of saveSettings,
+ * which would rewrite every setting and re-render the list that was just clicked.
+ */
+async function handleToggleGroupCollapsed(groupId: string) {
+  const next = new Set(collapsedGroupIds.value);
+  if (next.has(groupId)) {
+    next.delete(groupId);
+  } else {
+    next.add(groupId);
+  }
+  const ids = [...next];
+  config.settings = { ...config.settings, collapsed_groups: ids };
+  try {
+    await bridge.setCollapsedGroups(ids);
+  } catch (err) {
+    showToast({ type: 'error', message: t('保存分组折叠状态失败: {error}', { error: errorText(err) }) });
   }
 }
 
@@ -489,7 +693,7 @@ async function handleSaveSettings(nextSettings: Settings) {
     await bridge.saveSettings(nextSettings);
     settingsOpen.value = false;
   } catch (err) {
-    showToast({ type: 'error', message: `保存设置失败: ${errorText(err)}` });
+    showToast({ type: 'error', message: t('保存设置失败: {error}', { error: errorText(err) }) });
   }
 }
 
@@ -497,10 +701,10 @@ async function handleExportConfig() {
   try {
     const target = await bridge.exportConfig();
     if (target) {
-      showToast({ type: 'success', message: `配置已导出到 ${target}` });
+      showToast({ type: 'success', message: t('配置已导出到 {target}', { target }) });
     }
   } catch (err) {
-    showToast({ type: 'error', message: `导出失败: ${errorText(err)}` });
+    showToast({ type: 'error', message: t('导出失败: {error}', { error: errorText(err) }) });
   }
 }
 
@@ -508,10 +712,10 @@ async function handleImportConfig() {
   try {
     const count = await bridge.importConfig();
     if (count > 0) {
-      showToast({ type: 'success', message: `已导入 ${count} 个分组` });
+      showToast({ type: 'success', message: t('已导入 {count} 个分组', { count }) });
     }
   } catch (err) {
-    showToast({ type: 'error', message: `导入失败: ${errorText(err)}` });
+    showToast({ type: 'error', message: t('导入失败: {error}', { error: errorText(err) }) });
   }
 }
 
@@ -519,7 +723,7 @@ async function handleReloadConfig() {
   try {
     await bridge.reloadConfig();
   } catch (err) {
-    showToast({ type: 'error', message: `重载配置失败: ${errorText(err)}` });
+    showToast({ type: 'error', message: t('重载配置失败: {error}', { error: errorText(err) }) });
   }
 }
 
@@ -527,7 +731,7 @@ async function handleOpenConfigFile() {
   try {
     await bridge.openConfigFile();
   } catch (err) {
-    showToast({ type: 'error', message: `打开配置文件失败: ${errorText(err)}` });
+    showToast({ type: 'error', message: t('打开配置文件失败: {error}', { error: errorText(err) }) });
   }
 }
 
@@ -535,16 +739,28 @@ async function handleOpenBaseDir() {
   try {
     await bridge.openBaseDir();
   } catch (err) {
-    showToast({ type: 'error', message: `打开数据目录失败: ${errorText(err)}` });
+    showToast({ type: 'error', message: t('打开数据目录失败: {error}', { error: errorText(err) }) });
+  }
+}
+
+/** E10: writes the in-memory configuration back to the deleted config.json. */
+async function handleRebuildConfigFile() {
+  try {
+    await bridge.rebuildConfigFile();
+    configRemoved.value = false;
+    configError.value = '';
+    showToast({ type: 'success', message: t('已重建 config.json') });
+  } catch (err) {
+    showToast({ type: 'error', message: t('重建配置文件失败: {error}', { error: errorText(err) }) });
   }
 }
 
 async function handleResetWindowState() {
   try {
     await bridge.resetWindowState();
-    showToast({ type: 'success', message: '已重置窗口位置和大小' });
+    showToast({ type: 'success', message: t('已重置窗口位置和大小') });
   } catch (err) {
-    showToast({ type: 'error', message: `重置失败: ${errorText(err)}` });
+    showToast({ type: 'error', message: t('重置失败: {error}', { error: errorText(err) }) });
   }
 }
 
@@ -552,9 +768,9 @@ async function handleMoveItem(payload: { groupId: string; fromGroupId: string; i
   try {
     await bridge.moveItem(payload.fromGroupId, payload.itemId, payload.groupId, 0);
     const target = config.groups.find((g) => g.id === payload.groupId);
-    showToast({ type: 'success', message: `已移动到「${target?.name ?? '分组'}」` });
+    showToast({ type: 'success', message: t('已移动到「{name}」', { name: target?.name ?? t('未命名分组') }) });
   } catch (err) {
-    showToast({ type: 'error', message: `移动失败: ${errorText(err)}` });
+    showToast({ type: 'error', message: t('移动失败: {error}', { error: errorText(err) }) });
   }
 }
 
@@ -562,9 +778,9 @@ async function handleClearRecent() {
   try {
     await bridge.clearRecentItems();
     recentItems.value = [];
-    showToast({ type: 'success', message: '最近记录已清空' });
+    showToast({ type: 'success', message: t('最近记录已清空') });
   } catch (err) {
-    showToast({ type: 'error', message: `清空失败: ${errorText(err)}` });
+    showToast({ type: 'error', message: t('清空失败: {error}', { error: errorText(err) }) });
   }
 }
 
@@ -581,7 +797,7 @@ async function loadStartMenuEntries() {
     startMenuModal.entries = await bridge.scanStartMenu();
   } catch (err) {
     startMenuModal.entries = [];
-    showToast({ type: 'error', message: `扫描开始菜单失败: ${errorText(err)}` });
+    showToast({ type: 'error', message: t('扫描开始菜单失败: {error}', { error: errorText(err) }) });
   } finally {
     startMenuModal.loading = false;
   }
@@ -590,14 +806,15 @@ async function loadStartMenuEntries() {
 async function handleStartMenuImport(lnkPaths: string[]) {
   const groupId = activeGroup.value?.id;
   if (!groupId) {
-    showToast({ type: 'warning', message: '请先选择一个分组' });
+    showToast({ type: 'warning', message: t('请先选择一个分组') });
     return;
   }
   try {
     await bridge.importStartMenuItems(groupId, lnkPaths);
     startMenuModal.visible = false;
+    revealItems(groupId);
   } catch (err) {
-    showToast({ type: 'error', message: `导入失败: ${errorText(err)}` });
+    showToast({ type: 'error', message: t('导入失败: {error}', { error: errorText(err) }) });
   }
 }
 
@@ -609,13 +826,13 @@ async function handleUndo() {
       ? await bridge.undoDeleteGroup()
       : await bridge.undoDeleteItem();
     if (name) {
-      showToast({ type: 'success', message: `已恢复「${name}」` });
+      showToast({ type: 'success', message: t('已恢复「{name}」', { name }) });
     } else {
-      showToast({ type: 'info', message: '没有可撤销的删除' });
+      showToast({ type: 'info', message: t('没有可撤销的删除') });
     }
     await refreshUndoLabel();
   } catch (err) {
-    showToast({ type: 'error', message: `撤销失败: ${errorText(err)}` });
+    showToast({ type: 'error', message: t('撤销失败: {error}', { error: errorText(err) }) });
   }
 }
 
@@ -628,7 +845,14 @@ function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 function isOverlayOpen(): boolean {
-  return settingsOpen.value || itemModal.visible || groupModal.visible || startMenuModal.visible || contextMenu.visible;
+  return (
+    settingsOpen.value ||
+    itemModal.visible ||
+    groupModal.visible ||
+    startMenuModal.visible ||
+    contextMenu.visible ||
+    confirmOpen.value
+  );
 }
 
 function cycleGroup(delta: number) {
@@ -797,10 +1021,10 @@ async function deleteSelected() {
     await bridge.deleteItem(entry.groupId, entry.item.id);
     await refreshUndoLabel();
     if (undoLabel.value) {
-      showToast({ type: 'info', message: `${undoLabel.value}（Ctrl+Z）` });
+      showToast({ type: 'info', message: t('{label}（Ctrl+Z）', { label: undoLabel.value }) });
     }
   } catch (err) {
-    showToast({ type: 'error', message: `删除失败: ${errorText(err)}` });
+    showToast({ type: 'error', message: t('删除失败: {error}', { error: errorText(err) }) });
   }
 }
 
@@ -846,8 +1070,12 @@ onMounted(async () => {
       if (typeof payload === 'string') {
         configError.value = payload;
       } else {
-        configError.value = payload?.message || payload?.error || 'config.json 解析错误';
+        configError.value = payload?.message || payload?.error || t('config.json 解析错误');
       }
+    }),
+    // E10: deleting config.json is not an edit the UI can render, so it gets its own banner.
+    bridge.eventsOn('config:removed', () => {
+      configRemoved.value = true;
     }),
     bridge.eventsOn('ui:open-settings', () => {
       settingsOpen.value = true;
@@ -862,6 +1090,7 @@ onMounted(async () => {
       selectedIndex.value = 0;
       void topBarRef.value?.focusSearch();
       void refreshRecent();
+      void refreshMissingTargets();
     }),
     bridge.eventsOn('usage:updated', () => {
       void refreshRecent();
@@ -875,7 +1104,10 @@ onMounted(async () => {
     const initial = await bridge.getConfig();
     if (initial) applyConfig(initial);
   } catch (err) {
-    configError.value = `加载配置失败: ${errorText(err)}`;
+    configError.value = t('加载配置失败: {error}', { error: errorText(err) });
+  } finally {
+    // D11: only now may the grid render an empty state instead of its skeleton.
+    configReady.value = true;
   }
 
   try {
@@ -914,6 +1146,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', handleWindowResize);
   window.removeEventListener('mouseup', handleMouseUp);
   window.clearTimeout(searchTimer);
+  // Leaving the modal hint set would keep the backend from hiding the window on blur.
+  void bridge.setModalOpen(false).catch(() => undefined);
   for (const unsub of unsubscribers) unsub();
 });
 </script>
@@ -921,7 +1155,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="w-screen h-screen select-none wails-drop-zone">
     <div
-      class="w-full h-full rounded-lg glass-panel border jd-border grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
+      class="w-full h-full rounded-lg glass-panel border jd-border grid grid-rows-[auto_auto_minmax(0,1fr)_auto] overflow-hidden"
       :style="shellStyle"
     >
       <!-- Top Bar -->
@@ -930,46 +1164,128 @@ onBeforeUnmount(() => {
         :search-query="searchQuery"
         :active-group-name="activeGroupName || undefined"
         :item-count="displayItems.length"
+        :total-count="totalItemCount"
         @update:search-query="handleSearchInput"
         @add-item="openCreateItemModal"
         @open-settings="settingsOpen = true"
         @hide="bridge.hideWindow()"
       />
 
-      <!-- Non-crashing Config Error Banner -->
-      <Transition name="fade">
-        <div
-          v-if="configError"
-          class="px-4 py-2 bg-rose-500/20 border-b border-rose-400/30 text-rose-100 text-xs flex items-center justify-between gap-3 shrink-0"
-        >
-          <div class="flex items-center gap-2 min-w-0">
-            <svg class="w-4 h-4 text-rose-300 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="9" />
-              <path stroke-linecap="round" d="M12 8v5m0 3h.01" />
-            </svg>
-            <span class="truncate" :title="configError">配置文件异常: {{ configError }}</span>
-          </div>
-          <div class="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              class="px-2.5 py-1 rounded-lg bg-rose-400/25 hover:bg-rose-400/35 border border-rose-300/30 text-rose-50 transition-colors"
-              @click="handleOpenConfigFile"
-            >
-              打开 config.json
-            </button>
-            <button
-              type="button"
-              title="关闭提示"
-              class="p-1 rounded-lg text-rose-200/80 hover:text-white hover:bg-white/10 transition-colors"
-              @click="configError = ''"
-            >
-              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" d="M18 6L6 18M6 6l12 12" />
+      <!-- Banners: one wrapper keeps the grid rows stable whether one or both are shown -->
+      <div class="shrink-0">
+        <!-- Non-crashing Config Error Banner -->
+        <Transition name="fade">
+          <div
+            v-if="configError"
+            role="alert"
+            class="px-4 py-2 bg-rose-500/20 border-b border-rose-400/30 text-xs flex items-center justify-between gap-3 shrink-0"
+          >
+            <div class="flex items-center gap-2 min-w-0">
+              <svg
+                class="w-4 h-4 text-rose-300 shrink-0"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="12" r="9" />
+                <path stroke-linecap="round" d="M12 8v5m0 3h.01" />
               </svg>
-            </button>
+              <span class="truncate jd-text select-text" :title="configError">
+                {{ t('配置文件异常: {error}', { error: configError }) }}
+              </span>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                class="px-2.5 py-1 rounded-lg bg-rose-400/25 hover:bg-rose-400/35 border border-rose-300/30 text-rose-50 transition-colors"
+                @click="handleOpenConfigFile"
+              >
+                {{ t('打开 config.json') }}
+              </button>
+              <button
+                type="button"
+                :aria-label="t('关闭提示')"
+                :title="t('关闭提示')"
+                class="p-1 rounded-lg text-rose-200/80 hover:text-white hover:bg-white/10 transition-colors"
+                @click="configError = ''"
+              >
+                <svg
+                  class="w-3.5 h-3.5"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  aria-hidden="true"
+                >
+                  <path stroke-linecap="round" d="M18 6L6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
           </div>
-        </div>
-      </Transition>
+        </Transition>
+
+        <!-- E10: config.json was deleted while running -->
+        <Transition name="fade">
+          <div
+            v-if="configRemoved"
+            role="alert"
+            class="px-4 py-2 bg-amber-500/20 border-b border-amber-400/30 text-xs flex items-center justify-between gap-3 shrink-0"
+          >
+            <div class="flex items-center gap-2 min-w-0">
+              <svg
+                class="w-4 h-4 text-amber-300 shrink-0"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                aria-hidden="true"
+              >
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 3l9 16H3l9-16z" />
+                <path stroke-linecap="round" d="M12 9v4m0 3h.01" />
+              </svg>
+              <span class="truncate jd-text select-text">
+                {{ t('config.json 已被删除，当前仍在用内存中的配置') }}
+              </span>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                class="px-2.5 py-1 rounded-lg bg-amber-400/25 hover:bg-amber-400/35 border border-amber-300/30 text-amber-50 transition-colors"
+                @click="handleRebuildConfigFile"
+              >
+                {{ t('重建配置文件') }}
+              </button>
+              <button
+                type="button"
+                class="px-2.5 py-1 rounded-lg bg-amber-400/15 hover:bg-amber-400/25 border border-amber-300/25 text-amber-50 transition-colors"
+                @click="handleOpenBaseDir"
+              >
+                {{ t('打开数据目录') }}
+              </button>
+              <button
+                type="button"
+                :aria-label="t('关闭横幅')"
+                :title="t('关闭横幅')"
+                class="p-1 rounded-lg text-amber-100/80 hover:text-white hover:bg-white/10 transition-colors"
+                @click="configRemoved = false"
+              >
+                <svg
+                  class="w-3.5 h-3.5"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  aria-hidden="true"
+                >
+                  <path stroke-linecap="round" d="M18 6L6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </Transition>
+      </div>
 
       <!-- Workspace Body -->
       <div class="flex min-h-0 overflow-hidden">
@@ -979,9 +1295,13 @@ onBeforeUnmount(() => {
           :collapsed="sidebarCollapsed"
           :show-recent="config.settings.show_recent"
           :recent-count="recentItems.length"
+          :collapsed-group-ids="collapsedGroupIds"
+          :search-active="isSearching"
+          :hit-counts="searchHitCounts"
           @select="selectGroup"
           @add-group="openAddGroupModal"
           @toggle-collapse="sidebarCollapsed = !sidebarCollapsed"
+          @toggle-group-collapse="handleToggleGroupCollapsed"
           @contextmenu="openGroupContextMenu"
           @drop-item="handleMoveItem"
         />
@@ -994,14 +1314,19 @@ onBeforeUnmount(() => {
           :search-query="searchQuery"
           :cache-buster="iconCacheBuster"
           :has-active-group="hasActiveGroup"
+          :has-groups="config.groups.length > 0"
           :selected-index="selectedIndex"
           :click-mode="config.settings.click_mode"
           :loading="searching"
+          :config-ready="configReady"
+          :launching-ids="launchingIds"
+          :missing-targets="missingTargets"
           @launch="launchEntry"
           @contextmenu="selectEntry"
           @select="selectedIndex = $event"
           @clear-search="handleSearchInput('')"
           @add-item="openCreateItemModal"
+          @add-group="openAddGroupModal"
           @open-start-menu-import="openStartMenuImport"
         />
       </div>
@@ -1011,20 +1336,21 @@ onBeforeUnmount(() => {
         <div class="flex items-center gap-3 min-w-0">
           <span class="truncate">
             {{ config.settings.hotkey }}
-            <span v-if="!hotkeyStatus.registered" class="text-rose-300">(未注册)</span>
+            <span v-if="!hotkeyStatus.registered" class="text-rose-300">{{ t('(未注册)') }}</span>
           </span>
-          <span v-if="undoLabel" class="truncate jd-muted">{{ undoLabel }} · Ctrl+Z</span>
+          <span v-if="undoLabel" class="truncate jd-muted select-text">{{ undoLabel }} · Ctrl+Z</span>
         </div>
         <div class="flex items-center gap-3 shrink-0">
-          <span>{{ config.groups.length }} 个分组</span>
-          <span v-if="isSearching">{{ displayItems.length }} 个结果</span>
+          <span>{{ t('{count} 个分组', { count: config.groups.length }) }}</span>
+          <span v-if="isSearching">{{ t('{count} 个结果', { count: displayItems.length }) }}</span>
           <button
             type="button"
             class="px-1.5 py-0.5 rounded jd-hover transition-colors"
-            title="导入开始菜单"
+            :aria-label="t('导入开始菜单')"
+            :title="t('导入开始菜单')"
             @click="openStartMenuImport"
           >
-            导入
+            {{ t('导入') }}
           </button>
         </div>
       </footer>
@@ -1048,6 +1374,7 @@ onBeforeUnmount(() => {
       :cache-buster="iconCacheBuster"
       @close="itemModal.visible = false"
       @save="handleSaveItem"
+      @error="handleItemModalError"
     />
 
     <SettingsModal

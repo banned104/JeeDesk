@@ -12,11 +12,17 @@ export function AddItem(arg1:string,arg2:config.Item):Promise<void>;
 
 export function ApplyWindowState():Promise<void>;
 
+export function CheckUpdates():Promise<main.UpdateInfo>;
+
+export function CleanupIcons():Promise<number>;
+
 export function ClearRecentItems():Promise<void>;
 
 export function DeleteGroup(arg1:string):Promise<void>;
 
 export function DeleteItem(arg1:string,arg2:string):Promise<void>;
+
+export function EnsureIcons():Promise<number>;
 
 export function ExportConfig():Promise<string>;
 
@@ -27,6 +33,8 @@ export function GetConfig():Promise<config.Config>;
 export function GetConfigError():Promise<string>;
 
 export function GetHotkeyStatus():Promise<main.HotkeyStatus>;
+
+export function GetMissingTargets():Promise<Array<string>>;
 
 export function GetRecentItems(arg1:number):Promise<Array<main.RecentItem>>;
 
@@ -54,11 +62,15 @@ export function OpenConfigFile():Promise<void>;
 
 export function OpenItemLocation(arg1:string):Promise<void>;
 
+export function OpenLogFile():Promise<void>;
+
 export function PickDirectory(arg1:string):Promise<string>;
 
 export function PickFile(arg1:string,arg2:string,arg3:string):Promise<string>;
 
 export function Quit():Promise<void>;
+
+export function RebuildConfigFile():Promise<void>;
 
 export function ReloadConfig():Promise<void>;
 
@@ -77,6 +89,10 @@ export function SearchItems(arg1:string):Promise<Array<main.SearchHit>>;
 export function SetActiveGroup(arg1:string):Promise<void>;
 
 export function SetAutoStart(arg1:boolean):Promise<void>;
+
+export function SetCollapsedGroups(arg1:Array<string>):Promise<void>;
+
+export function SetModalOpen(arg1:boolean):Promise<void>;
 
 export function ShowWindow():Promise<void>;
 

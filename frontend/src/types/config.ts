@@ -11,6 +11,8 @@ export interface Settings {
   hide_on_launch: boolean;
   hide_on_blur: boolean;
   hide_on_esc: boolean;
+  /** Hide even when the cursor still rests over the panel. */
+  hide_on_blur_strict: boolean;
   /** Whether a single or a double click launches an item. */
   click_mode: ClickMode;
   auto_start: boolean;
@@ -18,6 +20,8 @@ export interface Settings {
   theme: ThemeMode;
   language: Language;
   show_recent: boolean;
+  /** Sidebar groups the user folded away. */
+  collapsed_groups: string[];
   window_opacity: number;
   window_width: number;
   window_height: number;
@@ -84,9 +88,21 @@ export interface AppInfo {
   config_path: string;
   config_backup: string;
   icons_dir: string;
+  log_path: string;
   exe_path: string;
   auto_start: boolean;
   auto_start_error: string;
+}
+
+/** Result of a manual update check. */
+export interface UpdateInfo {
+  current: string;
+  latest: string;
+  url: string;
+  notes: string;
+  available: boolean;
+  checked_at: number;
+  error: string;
 }
 
 /** One shortcut offered by the Start Menu import dialog. */
@@ -118,12 +134,14 @@ export const defaultSettings: Settings = {
   hide_on_launch: true,
   hide_on_blur: true,
   hide_on_esc: true,
+  hide_on_blur_strict: false,
   click_mode: 'double',
   auto_start: false,
   start_hidden: false,
   theme: 'dark',
   language: 'zh',
   show_recent: true,
+  collapsed_groups: [],
   window_opacity: 100,
   window_width: 0,
   window_height: 0,

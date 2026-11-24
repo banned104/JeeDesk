@@ -18,6 +18,14 @@ export function ApplyWindowState() {
   return window['go']['main']['App']['ApplyWindowState']();
 }
 
+export function CheckUpdates() {
+  return window['go']['main']['App']['CheckUpdates']();
+}
+
+export function CleanupIcons() {
+  return window['go']['main']['App']['CleanupIcons']();
+}
+
 export function ClearRecentItems() {
   return window['go']['main']['App']['ClearRecentItems']();
 }
@@ -28,6 +36,10 @@ export function DeleteGroup(arg1) {
 
 export function DeleteItem(arg1, arg2) {
   return window['go']['main']['App']['DeleteItem'](arg1, arg2);
+}
+
+export function EnsureIcons() {
+  return window['go']['main']['App']['EnsureIcons']();
 }
 
 export function ExportConfig() {
@@ -48,6 +60,10 @@ export function GetConfigError() {
 
 export function GetHotkeyStatus() {
   return window['go']['main']['App']['GetHotkeyStatus']();
+}
+
+export function GetMissingTargets() {
+  return window['go']['main']['App']['GetMissingTargets']();
 }
 
 export function GetRecentItems(arg1) {
@@ -102,6 +118,10 @@ export function OpenItemLocation(arg1) {
   return window['go']['main']['App']['OpenItemLocation'](arg1);
 }
 
+export function OpenLogFile() {
+  return window['go']['main']['App']['OpenLogFile']();
+}
+
 export function PickDirectory(arg1) {
   return window['go']['main']['App']['PickDirectory'](arg1);
 }
@@ -112,6 +132,10 @@ export function PickFile(arg1, arg2, arg3) {
 
 export function Quit() {
   return window['go']['main']['App']['Quit']();
+}
+
+export function RebuildConfigFile() {
+  return window['go']['main']['App']['RebuildConfigFile']();
 }
 
 export function ReloadConfig() {
@@ -148,6 +172,14 @@ export function SetActiveGroup(arg1) {
 
 export function SetAutoStart(arg1) {
   return window['go']['main']['App']['SetAutoStart'](arg1);
+}
+
+export function SetCollapsedGroups(arg1) {
+  return window['go']['main']['App']['SetCollapsedGroups'](arg1);
+}
+
+export function SetModalOpen(arg1) {
+  return window['go']['main']['App']['SetModalOpen'](arg1);
 }
 
 export function ShowWindow() {

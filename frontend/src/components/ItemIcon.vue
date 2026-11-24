@@ -65,6 +65,8 @@ watch(
       :src="iconUrl"
       :alt="name"
       class="w-full h-full object-contain rounded-xl drop-shadow-sm"
+      loading="lazy"
+      decoding="async"
       draggable="false"
       @error="loadError = true"
     />
@@ -75,6 +77,8 @@ watch(
       :src="fallbackUrl"
       :alt="name"
       class="w-full h-full object-contain rounded-xl drop-shadow-sm"
+      loading="lazy"
+      decoding="async"
       draggable="false"
       @error="fallbackError = true"
     />

@@ -65,12 +65,14 @@ export namespace config {
 	    hide_on_launch: boolean;
 	    hide_on_blur: boolean;
 	    hide_on_esc: boolean;
+	    hide_on_blur_strict: boolean;
 	    click_mode: string;
 	    auto_start: boolean;
 	    start_hidden: boolean;
 	    theme: string;
 	    language: string;
 	    show_recent: boolean;
+	    collapsed_groups: string[];
 	    window_opacity: number;
 	    window_width: number;
 	    window_height: number;
@@ -90,12 +92,14 @@ export namespace config {
 	        this.hide_on_launch = source["hide_on_launch"];
 	        this.hide_on_blur = source["hide_on_blur"];
 	        this.hide_on_esc = source["hide_on_esc"];
+	        this.hide_on_blur_strict = source["hide_on_blur_strict"];
 	        this.click_mode = source["click_mode"];
 	        this.auto_start = source["auto_start"];
 	        this.start_hidden = source["start_hidden"];
 	        this.theme = source["theme"];
 	        this.language = source["language"];
 	        this.show_recent = source["show_recent"];
+	        this.collapsed_groups = source["collapsed_groups"];
 	        this.window_opacity = source["window_opacity"];
 	        this.window_width = source["window_width"];
 	        this.window_height = source["window_height"];
@@ -149,6 +153,7 @@ export namespace main {
 	    config_path: string;
 	    config_backup: string;
 	    icons_dir: string;
+	    log_path: string;
 	    exe_path: string;
 	    auto_start: boolean;
 	    auto_start_error: string;
@@ -164,6 +169,7 @@ export namespace main {
 	        this.config_path = source["config_path"];
 	        this.config_backup = source["config_backup"];
 	        this.icons_dir = source["icons_dir"];
+	        this.log_path = source["log_path"];
 	        this.exe_path = source["exe_path"];
 	        this.auto_start = source["auto_start"];
 	        this.auto_start_error = source["auto_start_error"];
@@ -239,6 +245,30 @@ export namespace main {
 	        this.icon = source["icon"];
 	        this.admin = source["admin"];
 	        this.score = source["score"];
+	    }
+	}
+	export class UpdateInfo {
+	    current: string;
+	    latest: string;
+	    url: string;
+	    notes: string;
+	    available: boolean;
+	    checked_at: number;
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new UpdateInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.current = source["current"];
+	        this.latest = source["latest"];
+	        this.url = source["url"];
+	        this.notes = source["notes"];
+	        this.available = source["available"];
+	        this.checked_at = source["checked_at"];
+	        this.error = source["error"];
 	    }
 	}
 

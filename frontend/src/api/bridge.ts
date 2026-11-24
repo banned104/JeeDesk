@@ -9,6 +9,7 @@ import type {
   Settings,
   StartMenuEntry,
   ToastPayload,
+  UpdateInfo,
 } from '../types/config';
 import { defaultSettings } from '../types/config';
 
@@ -53,6 +54,14 @@ interface WailsGoApp {
   SaveWindowState(): Promise<void>;
   ResetWindowState(): Promise<void>;
   ShowWindow(): Promise<void>;
+
+  SetModalOpen(open: boolean): Promise<void>;
+  GetMissingTargets(): Promise<string[]>;
+  CleanupIcons(): Promise<number>;
+  RebuildConfigFile(): Promise<void>;
+  OpenLogFile(): Promise<void>;
+  CheckUpdates(): Promise<UpdateInfo>;
+  SetCollapsedGroups(ids: string[]): Promise<void>;
 }
 
 interface WailsRuntime {
@@ -128,6 +137,17 @@ let mockConfig: Config = {
     },
   ],
 };
+
+/** mockDelay simulates backend latency: instant answers hide loading and double-submit bugs. */
+function mockDelay(ms = 90): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** mockFlag reads a browser-only switch, for example ?hotkeyFail=1, to exercise error paths. */
+function mockFlag(name: string): boolean {
+  if (typeof window === 'undefined') return false;
+  return new URLSearchParams(window.location.search).get(name) === '1';
+}
 
 function emitMockEvent(eventName: string, ...args: unknown[]): void {
   const listeners = mockEventListeners.get(eventName);
@@ -220,6 +240,7 @@ export const bridge = {
     if (app) {
       return await app.GetConfig();
     }
+    await mockDelay(40);
     return cloneConfig(mockConfig);
   },
 
@@ -352,6 +373,10 @@ export const bridge = {
       await app.SaveSettings(settings);
       return;
     }
+    await mockDelay(160);
+    if (mockFlag('hotkeyFail')) {
+      throw new Error(`快捷键 ${settings.hotkey} 无法注册: mock 失败开关已打开`);
+    }
     mockConfig.settings = { ...settings };
     emitMockEvent('config:updated', cloneConfig(mockConfig));
     emitMockEvent('hotkey:status', {
@@ -386,7 +411,8 @@ export const bridge = {
     if (app) {
       return await app.PickFile(title, filterName, pattern);
     }
-    return '';
+    await mockDelay(120);
+    return pattern.includes('json') ? 'C:\Users\Dev\Documents\config.json' : 'C:\Windows\System32\notepad.exe';
   },
 
   async pickDirectory(title: string): Promise<string> {
@@ -394,7 +420,8 @@ export const bridge = {
     if (app) {
       return await app.PickDirectory(title);
     }
-    return '';
+    await mockDelay(120);
+    return 'C:\Program Files\Microsoft VS Code';
   },
 
   async hideWindow(): Promise<void> {
@@ -564,6 +591,7 @@ export const bridge = {
       exe_path: '',
       auto_start: false,
       auto_start_error: '',
+      log_path: '',
     };
   },
 
@@ -629,6 +657,82 @@ export const bridge = {
     if (app) {
       await app.ResetWindowState();
     }
+  },
+
+  /** Tells the backend a modal dialog is open so losing focus does not hide the window. */
+  async setModalOpen(open: boolean): Promise<void> {
+    const app = getApp();
+    if (app) {
+      await app.SetModalOpen(open);
+    }
+  },
+
+  /** Item IDs whose target file is gone, so the grid can mark them. */
+  async getMissingTargets(): Promise<string[]> {
+    const app = getApp();
+    if (app) {
+      return await app.GetMissingTargets();
+    }
+    if (mockFlag('missing')) {
+      const first = mockConfig.groups[0]?.items[0];
+      return first ? [first.id] : [];
+    }
+    return [];
+  },
+
+  /** Remembers which sidebar groups are folded away. */
+  async setCollapsedGroups(ids: string[]): Promise<void> {
+    const app = getApp();
+    if (app) {
+      await app.SetCollapsedGroups(ids);
+      return;
+    }
+    mockConfig.settings.collapsed_groups = [...ids];
+  },
+
+  /** Deletes icon files no item references and returns how many were removed. */
+  async cleanupIcons(): Promise<number> {
+    const app = getApp();
+    if (app) {
+      return await app.CleanupIcons();
+    }
+    return 0;
+  },
+
+  /** Rewrites config.json from memory; used after the file was deleted by accident. */
+  async rebuildConfigFile(): Promise<void> {
+    const app = getApp();
+    if (app) {
+      await app.RebuildConfigFile();
+      return;
+    }
+    emitMockEvent('ui:toast', { type: 'success', message: '[Dev] 已重建 config.json' } satisfies ToastPayload);
+  },
+
+  async openLogFile(): Promise<void> {
+    const app = getApp();
+    if (app) {
+      await app.OpenLogFile();
+      return;
+    }
+    emitMockEvent('ui:toast', { type: 'info', message: '[Dev] 打开日志' } satisfies ToastPayload);
+  },
+
+  async checkUpdates(): Promise<UpdateInfo> {
+    const app = getApp();
+    if (app) {
+      return await app.CheckUpdates();
+    }
+    await mockDelay(400);
+    return {
+      current: 'dev',
+      latest: 'dev',
+      url: '',
+      notes: '',
+      available: false,
+      checked_at: Math.floor(Date.now() / 1000),
+      error: '浏览器 mock 不联网检查更新',
+    };
   },
 
   /** Receives files dropped onto the window. Returns a no-op when the runtime is absent. */

@@ -22,6 +22,8 @@ export interface Settings {
   show_recent: boolean;
   /** Sidebar groups the user folded away. */
   collapsed_groups: string[];
+  /** True once a real position was stored; negative coordinates are valid on multi-monitor setups. */
+  window_positioned: boolean;
   window_opacity: number;
   window_width: number;
   window_height: number;
@@ -145,6 +147,7 @@ export const defaultSettings: Settings = {
   window_opacity: 100,
   window_width: 0,
   window_height: 0,
+  window_positioned: false,
   window_x: 0,
   window_y: 0,
   font_scale: 100,

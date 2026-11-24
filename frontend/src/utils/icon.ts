@@ -79,14 +79,18 @@ export function isFolderLikePath(targetPath: string): boolean {
 
 /**
  * Formats a concise multi-line tooltip string for an item card.
+ *
+ * `argsLabel` is the label placed in front of the launch arguments, colon included. Callers pass
+ * an already translated label (e.g. `t('参数:')`) so the tooltip follows the UI language; the
+ * Chinese default keeps existing callers working unchanged.
  */
-export function formatItemTooltip(item: Item): string {
+export function formatItemTooltip(item: Item, argsLabel = '参数:'): string {
   const lines = [item.name];
   if (item.path) {
     lines.push(item.path);
   }
   if (item.args) {
-    lines.push(`参数: ${item.args}`);
+    lines.push(`${argsLabel} ${item.args}`);
   }
   return lines.join('\n');
 }

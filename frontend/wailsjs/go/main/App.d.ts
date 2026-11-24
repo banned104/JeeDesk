@@ -64,6 +64,8 @@ export function OpenItemLocation(arg1:string):Promise<void>;
 
 export function OpenLogFile():Promise<void>;
 
+export function OpenURL(arg1:string):Promise<void>;
+
 export function PickDirectory(arg1:string):Promise<string>;
 
 export function PickFile(arg1:string,arg2:string,arg3:string):Promise<string>;
@@ -91,6 +93,8 @@ export function SetActiveGroup(arg1:string):Promise<void>;
 export function SetAutoStart(arg1:boolean):Promise<void>;
 
 export function SetCollapsedGroups(arg1:Array<string>):Promise<void>;
+
+export function SetItemAdmin(arg1:string,arg2:string,arg3:boolean):Promise<void>;
 
 export function SetModalOpen(arg1:boolean):Promise<void>;
 

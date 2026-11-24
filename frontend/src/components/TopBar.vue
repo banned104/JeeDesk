@@ -13,6 +13,7 @@ registerTranslations({
   '隐藏窗口': 'Hide window',
   '搜索结果': 'Search results',
   '浏览器 mock': 'Browser mock',
+  'Alt+←/→ 切换分组（Ctrl+Tab 也可）': 'Alt+←/→ switch groups (Ctrl+Tab also works)',
 });
 
 const props = defineProps<{
@@ -82,6 +83,7 @@ defineExpose({ focusSearch, blurSearch });
       </span>
       <span
         v-if="activeGroupName || searchActive"
+        :title="t('Alt+←/→ 切换分组（Ctrl+Tab 也可）')"
         class="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] jd-surface-soft jd-muted border jd-border truncate max-w-[180px]"
       >
         <span class="truncate">{{ searchActive ? t('搜索结果') : activeGroupName }}</span>

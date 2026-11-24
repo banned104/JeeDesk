@@ -11,8 +11,17 @@ export const language = ref<Language>('zh');
 
 const translations: Record<string, Record<string, string>> = { en: {} };
 
-/** registerTranslations adds English strings for the given Chinese source texts. */
+/**
+ * registerTranslations adds English strings for the given Chinese source texts. Components register
+ * the same shared labels (保存, 取消 …) on purpose, so only a conflicting translation is reported.
+ */
 export function registerTranslations(table: Record<string, string>): void {
+  for (const [source, english] of Object.entries(table)) {
+    const existing = translations.en[source];
+    if (existing !== undefined && existing !== english && import.meta.env.DEV) {
+      console.warn(`[i18n] conflicting translation for "${source}": "${existing}" vs "${english}"`);
+    }
+  }
   Object.assign(translations.en, table);
 }
 

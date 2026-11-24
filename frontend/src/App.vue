@@ -10,7 +10,6 @@ import type {
   Item,
   RecentItem,
   SearchHit,
-  Settings,
   StartMenuEntry,
   ToastMessage,
   ToastPayload,
@@ -25,6 +24,7 @@ import ItemEditModal, { type ItemSaveRequest } from './components/ItemEditModal.
 import SettingsModal from './components/SettingsModal.vue';
 import GroupModal from './components/GroupModal.vue';
 import StartMenuImportModal from './components/StartMenuImportModal.vue';
+import ConfirmDialog from './components/ConfirmDialog.vue';
 import ToastContainer from './components/ToastContainer.vue';
 
 registerTranslations({
@@ -55,7 +55,6 @@ registerTranslations({
   请先创建一个分组再拖入文件: 'Create a group before dropping files',
   '添加拖入文件失败: {error}': 'Adding the dropped files failed: {error}',
   '分组操作失败: {error}': 'Group action failed: {error}',
-  '保存设置失败: {error}': 'Saving the settings failed: {error}',
   '配置已导出到 {target}': 'Configuration exported to {target}',
   '导出失败: {error}': 'Export failed: {error}',
   '已导入 {count} 个分组': 'Imported {count} groups',
@@ -76,6 +75,8 @@ registerTranslations({
   '撤销失败: {error}': 'Undo failed: {error}',
   '删除失败: {error}': 'Delete failed: {error}',
   '保存分组折叠状态失败: {error}': 'Saving the folded groups failed: {error}',
+  '检查失效目标失败: {error}': 'Checking for missing targets failed: {error}',
+  'Alt+←/→ 切换分组（Ctrl+Tab 也可）': 'Alt+←/→ switch groups (Ctrl+Tab also works)',
   '配置文件异常: {error}': 'Configuration problem: {error}',
   '打开 config.json': 'Open config.json',
   关闭提示: 'Dismiss notification',
@@ -131,10 +132,17 @@ const configRemoved = ref(false);
 
 const topBarRef = ref<InstanceType<typeof TopBar> | null>(null);
 const gridRef = ref<InstanceType<typeof ItemGrid> | null>(null);
+const settingsRef = ref<InstanceType<typeof SettingsModal> | null>(null);
 
 // Modals
 const settingsOpen = ref(false);
-const itemModal = reactive<{ visible: boolean; item: Item | null }>({ visible: false, item: null });
+// groupId is stored next to the item: in the recent view there is no active group, and the dialog
+// would otherwise save against an empty group id.
+const itemModal = reactive<{ visible: boolean; item: Item | null; groupId: string }>({
+  visible: false,
+  item: null,
+  groupId: '',
+});
 const groupModal = reactive<{
   visible: boolean;
   mode: 'add' | 'rename';
@@ -144,10 +152,51 @@ const groupModal = reactive<{
 const startMenuModal = reactive<{
   visible: boolean;
   loading: boolean;
+  busy: boolean;
+  error: string;
   entries: StartMenuEntry[];
-}>({ visible: false, loading: false, entries: [] });
-// A confirmation dialog, once shown, also counts as a modal for the backend hint below.
-const confirmOpen = ref(false);
+}>({ visible: false, loading: false, busy: false, error: '', entries: [] });
+
+// Destructive actions go through one confirm dialog instead of a browser confirm(), which
+// WebView2 renders as a separate frameless window.
+const confirmDialog = reactive<{
+  visible: boolean;
+  title: string;
+  message: string;
+  confirmLabel: string;
+  danger: boolean;
+  busy: boolean;
+}>({ visible: false, title: '', message: '', confirmLabel: '', danger: false, busy: false });
+let confirmAction: (() => Promise<void>) | null = null;
+
+function askConfirm(options: { title: string; message: string; confirmLabel?: string; danger?: boolean }, action: () => Promise<void>) {
+  confirmDialog.title = options.title;
+  confirmDialog.message = options.message;
+  confirmDialog.confirmLabel = options.confirmLabel ?? '';
+  confirmDialog.danger = options.danger ?? false;
+  confirmDialog.busy = false;
+  confirmDialog.visible = true;
+  confirmAction = action;
+}
+
+function closeConfirm() {
+  if (confirmDialog.busy) return;
+  confirmDialog.visible = false;
+  confirmAction = null;
+}
+
+async function runConfirm() {
+  const action = confirmAction;
+  if (!action || confirmDialog.busy) return;
+  confirmDialog.busy = true;
+  try {
+    await action();
+    confirmDialog.visible = false;
+    confirmAction = null;
+  } finally {
+    confirmDialog.busy = false;
+  }
+}
 
 // Context Menu
 const contextMenu = reactive<{
@@ -234,8 +283,7 @@ const anyModalOpen = computed(
     itemModal.visible ||
     groupModal.visible ||
     startMenuModal.visible ||
-    contextMenu.visible ||
-    confirmOpen.value
+    contextMenu.visible
 );
 
 watch(
@@ -328,6 +376,21 @@ function handleSystemThemeChange(event: MediaQueryListEvent) {
 
 // --- config ---------------------------------------------------------------
 
+// Pending reveal bookkeeping: which group to jump back to, and which item ids existed before the
+// add, so the newly added entry can be identified once the config arrives.
+let pendingRevealGroupId = '';
+let revealBaselineIds = new Set<string>();
+let revealPendingItemId: string | null = null;
+
+/** revealSelection selects the last item of a group, or the entry matching pendingItemId. */
+function revealSelection(groupId: string, pendingItemId: string | null) {
+  const group = config.groups.find((g) => g.id === groupId);
+  if (!group || group.items.length === 0) return;
+  const index = pendingItemId ? group.items.findIndex((item) => item.id === pendingItemId) : -1;
+  selectedIndex.value = index >= 0 ? index : group.items.length - 1;
+  void gridRef.value?.ensureSelectionVisible();
+}
+
 function applyConfig(next: Config) {
   const settings = { ...defaultSettings, ...next.settings };
   config.settings = settings;
@@ -349,6 +412,18 @@ function applyConfig(next: Config) {
   void refreshRecent();
   void refreshUndoLabel();
   void refreshMissingTargets();
+
+  // The pending reveal from an add/drop/import can only be resolved now that the new items exist.
+  if (pendingRevealGroupId) {
+    const groupId = pendingRevealGroupId;
+    pendingRevealGroupId = '';
+    const group = config.groups.find((g) => g.id === groupId);
+    const added = group?.items.find((item) => !revealBaselineIds.has(item.id));
+    revealPendingItemId = added?.id ?? null;
+    void nextTick(() => {
+      revealSelection(groupId, revealPendingItemId);
+    });
+  }
 }
 
 function selectGroup(groupId: string, options: { silent?: boolean } = {}) {
@@ -382,21 +457,40 @@ async function refreshUndoLabel() {
   }
 }
 
-/** C7 refreshes the set of broken targets; config changes can fix or break any of them. */
+// Signature of the group data the last missing-target probe ran against. Anything that cannot move
+// a target (a settings save, folding a group, a window show) must not trigger a full os.Stat sweep.
+let missingTargetsSignature = '';
+let missingTargetsFailureReported = false;
+
+/**
+ * C7 refreshes the set of broken targets; config changes can fix or break any of them. The probe
+ * stats every target, so it only runs when the groups actually changed.
+ */
 async function refreshMissingTargets() {
+  const signature = JSON.stringify(config.groups);
+  if (signature === missingTargetsSignature) return;
   try {
     missingTargets.value = new Set(await bridge.getMissingTargets());
-  } catch {
-    missingTargets.value = new Set();
+    missingTargetsSignature = signature;
+    missingTargetsFailureReported = false;
+  } catch (err) {
+    // A failed probe keeps the previous set: forgetting broken entries would hide them again.
+    if (!missingTargetsFailureReported) {
+      missingTargetsFailureReported = true;
+      showToast({ type: 'error', message: t('检查失效目标失败: {error}', { error: errorText(err) }) });
+    }
   }
 }
 
 let searchTimer = 0;
+// Only the newest query may write into the grid; slower answers are dropped instead of applied.
+let searchSeq = 0;
 
 function handleSearchInput(value: string) {
   searchQuery.value = value;
   selectedIndex.value = 0;
   window.clearTimeout(searchTimer);
+  const seq = ++searchSeq;
   if (!value.trim()) {
     searchHits.value = [];
     searching.value = false;
@@ -405,12 +499,16 @@ function handleSearchInput(value: string) {
   searching.value = true;
   searchTimer = window.setTimeout(async () => {
     try {
-      searchHits.value = await bridge.searchItems(value);
+      const hits = await bridge.searchItems(value);
+      if (seq !== searchSeq) return;
+      searchHits.value = hits;
     } catch (err) {
+      if (seq !== searchSeq) return;
       searchHits.value = [];
       showToast({ type: 'error', message: t('搜索失败: {error}', { error: errorText(err) }) });
     } finally {
-      searching.value = false;
+      // An outdated request must not clear the spinner of the query that replaced it.
+      if (seq === searchSeq) searching.value = false;
     }
   }, SEARCH_DEBOUNCE_MS);
 }
@@ -482,6 +580,14 @@ function closeContextMenu() {
   contextMenu.visible = false;
 }
 
+/**
+ * storedItem returns the item as the config holds it. Search hits and recent entries carry a
+ * stripped-down item (no args, no work_dir), so those objects must never reach an update call.
+ */
+function storedItem(groupId: string, itemId: string): Item | null {
+  return config.groups.find((g) => g.id === groupId)?.items.find((i) => i.id === itemId) ?? null;
+}
+
 async function handleContextMenuSelect(actionId: string) {
   const entry = contextMenu.entry;
   const group = contextMenu.group;
@@ -496,16 +602,21 @@ async function handleContextMenuSelect(actionId: string) {
     }
 
     if (actionId === 'edit-item' && entry) {
-      itemModal.item = { ...entry.item };
+      // Open the dialog for the group the item really lives in, with every field filled in.
+      itemModal.item = { ...(storedItem(entry.groupId, entry.item.id) ?? entry.item) };
+      itemModal.groupId = entry.groupId;
       itemModal.visible = true;
       return;
     }
 
     if (actionId === 'toggle-admin' && entry) {
-      await bridge.updateItem(entry.groupId, { ...entry.item, admin: !entry.item.admin });
+      // A dedicated endpoint flips the flag only; sending the partial display item would erase
+      // the arguments and working directory that were saved for it.
+      const nextAdmin = !entry.item.admin;
+      await bridge.setItemAdmin(entry.groupId, entry.item.id, nextAdmin);
       showToast({
         type: 'success',
-        message: entry.item.admin ? t('已取消管理员身份运行') : t('已设为以管理员身份运行'),
+        message: nextAdmin ? t('已设为以管理员身份运行') : t('已取消管理员身份运行'),
       });
       return;
     }
@@ -559,11 +670,25 @@ async function handleContextMenuSelect(actionId: string) {
     }
 
     if (actionId === 'delete-group' && group) {
-      await bridge.deleteGroup(group.id);
-      await refreshUndoLabel();
-      if (undoLabel.value) {
-        showToast({ type: 'info', message: t('{label}（Ctrl+Z）', { label: undoLabel.value }) });
-      }
+      const itemCount = group.items.length;
+      askConfirm(
+        {
+          title: t('删除分组'),
+          message:
+            itemCount > 0
+              ? t('分组「{name}」包含 {count} 个项目，删除后可以按 Ctrl+Z 撤销。', { name: group.name, count: itemCount })
+              : t('确定删除分组「{name}」吗？可以按 Ctrl+Z 撤销。', { name: group.name }),
+          confirmLabel: t('删除'),
+          danger: true,
+        },
+        async () => {
+          await bridge.deleteGroup(group.id);
+          await refreshUndoLabel();
+          if (undoLabel.value) {
+            showToast({ type: 'info', message: t('{label}（Ctrl+Z）', { label: undoLabel.value }) });
+          }
+        }
+      );
     }
   } catch (err) {
     showToast({ type: 'error', message: t('操作失败: {error}', { error: errorText(err) }) });
@@ -584,13 +709,15 @@ function revealItems(groupId: string) {
   if (groupId && groupId !== activeGroupId.value) {
     selectGroup(groupId);
   }
+  // The item is not in `config` yet: the backend answers with a config:updated event afterwards.
+  // Selecting the last entry now would point at the previous item, so the id is remembered and
+  // consumed by applyConfig once the new list is in.
+  pendingRevealGroupId = groupId;
+  revealPendingItemId = null;
+  const existing = config.groups.find((g) => g.id === groupId);
+  revealBaselineIds = new Set(existing?.items.map((item) => item.id) ?? []);
   void nextTick(() => {
-    const group = config.groups.find((g) => g.id === groupId);
-    const total = group?.items?.length ?? 0;
-    if (total > 0) {
-      selectedIndex.value = total - 1;
-      void gridRef.value?.ensureSelectionVisible();
-    }
+    revealSelection(groupId, revealPendingItemId);
   });
   void refreshMissingTargets();
 }
@@ -602,6 +729,7 @@ function openCreateItemModal() {
     return;
   }
   itemModal.item = null;
+  itemModal.groupId = activeGroup.value.id;
   itemModal.visible = true;
 }
 
@@ -653,7 +781,7 @@ function openAddGroupModal() {
   groupModal.visible = true;
 }
 
-async function handleGroupModalSubmit(name: string) {
+async function handleGroupModalSubmit(name: string, done?: () => void) {
   try {
     if (groupModal.mode === 'add') {
       // The backend has already made the new group active; select it here too, so the config
@@ -665,6 +793,8 @@ async function handleGroupModalSubmit(name: string) {
     groupModal.visible = false;
   } catch (err) {
     showToast({ type: 'error', message: t('分组操作失败: {error}', { error: errorText(err) }) });
+  } finally {
+    done?.();
   }
 }
 
@@ -685,15 +815,6 @@ async function handleToggleGroupCollapsed(groupId: string) {
     await bridge.setCollapsedGroups(ids);
   } catch (err) {
     showToast({ type: 'error', message: t('保存分组折叠状态失败: {error}', { error: errorText(err) }) });
-  }
-}
-
-async function handleSaveSettings(nextSettings: Settings) {
-  try {
-    await bridge.saveSettings(nextSettings);
-    settingsOpen.value = false;
-  } catch (err) {
-    showToast({ type: 'error', message: t('保存设置失败: {error}', { error: errorText(err) }) });
   }
 }
 
@@ -793,10 +914,12 @@ async function openStartMenuImport() {
 
 async function loadStartMenuEntries() {
   startMenuModal.loading = true;
+  startMenuModal.error = '';
   try {
     startMenuModal.entries = await bridge.scanStartMenu();
   } catch (err) {
     startMenuModal.entries = [];
+    startMenuModal.error = errorText(err);
     showToast({ type: 'error', message: t('扫描开始菜单失败: {error}', { error: errorText(err) }) });
   } finally {
     startMenuModal.loading = false;
@@ -809,12 +932,15 @@ async function handleStartMenuImport(lnkPaths: string[]) {
     showToast({ type: 'warning', message: t('请先选择一个分组') });
     return;
   }
+  startMenuModal.busy = true;
   try {
     await bridge.importStartMenuItems(groupId, lnkPaths);
     startMenuModal.visible = false;
     revealItems(groupId);
   } catch (err) {
     showToast({ type: 'error', message: t('导入失败: {error}', { error: errorText(err) }) });
+  } finally {
+    startMenuModal.busy = false;
   }
 }
 
@@ -850,9 +976,17 @@ function isOverlayOpen(): boolean {
     itemModal.visible ||
     groupModal.visible ||
     startMenuModal.visible ||
-    contextMenu.visible ||
-    confirmOpen.value
+    confirmDialog.visible ||
+    contextMenu.visible
   );
+}
+
+/**
+ * The settings dialog owns its close path: it rolls back a language preview and refuses to close
+ * while a save is in flight. Esc therefore goes through it instead of flipping the flag here.
+ */
+function closeSettings() {
+  settingsRef.value?.handleClose();
 }
 
 function cycleGroup(delta: number) {
@@ -884,7 +1018,7 @@ function handleWindowKeyDown(event: KeyboardEvent) {
       return;
     }
     if (settingsOpen.value) {
-      settingsOpen.value = false;
+      closeSettings();
       return;
     }
     if (isSearching.value) {
@@ -899,7 +1033,16 @@ function handleWindowKeyDown(event: KeyboardEvent) {
 
   if (isOverlayOpen()) return;
 
-  const typing = isTypingTarget(event.target);
+  // Everything below is a global shortcut, so a focused text field is checked first: inside an input
+  // Ctrl+Z must undo the text, Tab must move focus, and the arrows must move the caret. Only Enter
+  // (launch the selection) and Escape (handled above) are taken away from it.
+  if (isTypingTarget(event.target)) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void launchSelected();
+    }
+    return;
+  }
 
   if (event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'z') {
     event.preventDefault();
@@ -950,24 +1093,31 @@ function handleWindowKeyDown(event: KeyboardEvent) {
     return;
   }
 
-  if (event.key === 'Tab') {
+  // Alt+Left/Right switches groups (the header pill names the shortcut); Tab stays free for focus.
+  if (
+    event.altKey &&
+    !event.ctrlKey &&
+    !event.shiftKey &&
+    (event.key === 'ArrowLeft' || event.key === 'ArrowRight')
+  ) {
     event.preventDefault();
-    cycleGroup(event.shiftKey ? -1 : 1);
+    cycleGroup(event.key === 'ArrowLeft' ? -1 : 1);
+    return;
+  }
+
+  if (event.key === 'Tab') {
+    // Tab keeps moving focus: hijacking it trapped keyboard users inside the grid. Ctrl+Tab (and
+    // Ctrl+Shift+Tab) still switches groups for people used to the old behaviour.
+    if (event.ctrlKey) {
+      event.preventDefault();
+      cycleGroup(event.shiftKey ? -1 : 1);
+    }
     return;
   }
 
   if (event.key === 'F5') {
     event.preventDefault();
     void refreshRecent();
-    return;
-  }
-
-  if (typing) {
-    // The search box owns the arrow keys while it has focus; only Enter launches.
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      void launchSelected();
-    }
     return;
   }
 
@@ -1088,9 +1238,12 @@ onMounted(async () => {
     }),
     bridge.eventsOn('window:shown', () => {
       selectedIndex.value = 0;
-      void topBarRef.value?.focusSearch();
+      // A dialog that survived the window being hidden keeps the focus; stealing it would pull the
+      // caret out of the form the user was in the middle of filling.
+      if (!anyModalOpen.value) {
+        void topBarRef.value?.focusSearch();
+      }
       void refreshRecent();
-      void refreshMissingTargets();
     }),
     bridge.eventsOn('usage:updated', () => {
       void refreshRecent();
@@ -1370,7 +1523,7 @@ onBeforeUnmount(() => {
     <ItemEditModal
       :visible="itemModal.visible"
       :item="itemModal.item"
-      :group-id="activeGroup?.id ?? ''"
+      :group-id="itemModal.groupId"
       :cache-buster="iconCacheBuster"
       @close="itemModal.visible = false"
       @save="handleSaveItem"
@@ -1378,12 +1531,12 @@ onBeforeUnmount(() => {
     />
 
     <SettingsModal
+      ref="settingsRef"
       :visible="settingsOpen"
       :settings="config.settings"
       :hotkey-status="hotkeyStatus"
       :app-info="appInfo"
       @close="settingsOpen = false"
-      @save="handleSaveSettings"
       @open-config-file="handleOpenConfigFile"
       @reload-config="handleReloadConfig"
       @open-base-dir="handleOpenBaseDir"
@@ -1406,10 +1559,23 @@ onBeforeUnmount(() => {
       :visible="startMenuModal.visible"
       :entries="startMenuModal.entries"
       :loading="startMenuModal.loading"
+      :busy="startMenuModal.busy"
+      :error="startMenuModal.error"
       :group-name="activeGroupName"
       @close="startMenuModal.visible = false"
       @refresh="loadStartMenuEntries"
       @import="handleStartMenuImport"
+    />
+
+    <ConfirmDialog
+      :visible="confirmDialog.visible"
+      :title="confirmDialog.title"
+      :message="confirmDialog.message"
+      :confirm-label="confirmDialog.confirmLabel"
+      :danger="confirmDialog.danger"
+      :busy="confirmDialog.busy"
+      @confirm="runConfirm"
+      @close="closeConfirm"
     />
 
     <!-- Transient Toast Container -->

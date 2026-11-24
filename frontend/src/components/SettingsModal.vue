@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { bridge } from '../api/bridge';
 import { registerTranslations, setLanguage, t } from '../i18n';
 import type {
@@ -194,6 +194,7 @@ const SETTINGS_FIELDS = [
   'theme',
   'language',
   'show_recent',
+  'window_positioned',
   'window_opacity',
   'window_width',
   'window_height',
@@ -246,6 +247,8 @@ function copySettings(source: Settings): Settings {
     show_recent: source.show_recent ?? true,
     // Copied, never aliased: the draft must round-trip the collapsed sidebar groups untouched.
     collapsed_groups: copyStringList(source.collapsed_groups),
+    // Window geometry belongs to the shell, so it is only carried through, never edited here.
+    window_positioned: source.window_positioned ?? false,
     window_opacity: source.window_opacity ?? 100,
     window_width: source.window_width ?? 0,
     window_height: source.window_height ?? 0,
@@ -281,6 +284,71 @@ const form = reactive<Settings>(normalizeSettings(props.settings));
 const baseline = ref<Settings>(normalizeSettings(props.settings));
 
 const dirty = computed(() => !sameSettings(form, baseline.value));
+
+// --- dialog focus management ----------------------------------------------
+
+const titleId = 'settings-modal-title';
+const dialogRef = ref<HTMLElement | null>(null);
+const bodyRef = ref<HTMLElement | null>(null);
+// Element that had focus before the dialog opened, restored once it closes.
+let previousFocus: HTMLElement | null = null;
+
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function focusableElements(root: HTMLElement | null): HTMLElement[] {
+  if (!root) return [];
+  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+    (el) => el.getClientRects().length > 0
+  );
+}
+
+/** Focus the first control of the body, so Tab walks the form instead of the backdrop. */
+async function focusFirstField() {
+  await nextTick();
+  const target = focusableElements(bodyRef.value)[0] ?? dialogRef.value;
+  target?.focus();
+}
+
+// Simple focus trap: Tab / Shift+Tab cycle inside the dialog instead of reaching the page behind it.
+function handleTabKey(event: KeyboardEvent) {
+  if (event.key !== 'Tab') return;
+  const root = dialogRef.value;
+  if (!root) return;
+  const elements = focusableElements(root);
+  if (elements.length === 0) {
+    event.preventDefault();
+    root.focus();
+    return;
+  }
+  const first = elements[0];
+  const last = elements[elements.length - 1];
+  const active = document.activeElement;
+  if (event.shiftKey) {
+    if (active === first || !root.contains(active)) {
+      event.preventDefault();
+      last.focus();
+    }
+    return;
+  }
+  if (active === last || !root.contains(active)) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function rememberFocus() {
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && !dialogRef.value?.contains(active)) {
+    previousFocus = active;
+  }
+}
+
+function restoreFocus() {
+  const target = previousFocus;
+  previousFocus = null;
+  if (target && document.contains(target)) target.focus();
+}
 
 const recording = ref(false);
 const hotkeyHint = ref('');
@@ -665,12 +733,23 @@ function errorText(err: unknown): string {
 }
 
 function handleClose() {
+  // Esc while recording only cancels the capture: the dialog itself stays open.
+  if (recording.value) {
+    recording.value = false;
+    hotkeyHint.value = '';
+    return;
+  }
+  // Busy: a save is in flight, so nothing closes and nothing is rolled back.
   if (saving.value) return;
   // A language switch previews immediately; cancelling must put the saved language back.
   if (dirty.value) setLanguage(props.settings.language);
   resetTransientState();
   emit('close');
 }
+
+// The shell owns the global Esc shortcut, so it calls this instead of flipping `visible` itself;
+// that keeps the busy guard and the language rollback in one place.
+defineExpose({ handleClose });
 
 function handleClearRecent() {
   if (!confirmClearRecent.value) {
@@ -705,11 +784,12 @@ async function handleCheckUpdates() {
   }
 }
 
-function openUpdatePage() {
+async function openUpdatePage() {
   const url = updateUrl.value;
   if (!url) return;
   try {
-    window.open(url, '_blank', 'noopener');
+    // The system browser, not a second WebView window: window.open would open a frameless panel.
+    await bridge.openUrl(url);
   } catch (err) {
     updateError.value = t('打开下载页失败：{error}', { error: errorText(err) });
   }
@@ -753,10 +833,14 @@ watch(
   () => props.visible,
   (visible) => {
     resetTransientState();
-    if (visible) {
-      applySettings(props.settings);
-      void ensureAppInfo();
+    if (!visible) {
+      restoreFocus();
+      return;
     }
+    rememberFocus();
+    applySettings(props.settings);
+    void ensureAppInfo();
+    void focusFirstField();
   },
   { immediate: true }
 );
@@ -789,6 +873,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleRecordingKeydown, true);
   clearTimers();
+  restoreFocus();
 });
 </script>
 
@@ -801,17 +886,24 @@ onBeforeUnmount(() => {
         @mousedown.self="handleClose"
       >
         <form
-          class="w-full max-w-[580px] max-h-[90vh] rounded-2xl glass-modal border jd-border-strong shadow-2xl flex flex-col overflow-hidden"
+          ref="dialogRef"
+          role="dialog"
+          aria-modal="true"
+          :aria-labelledby="titleId"
+          tabindex="-1"
+          class="w-full max-w-[580px] max-h-[90vh] rounded-2xl glass-modal border jd-border-strong shadow-2xl flex flex-col overflow-hidden focus:outline-none"
+          @keydown="handleTabKey"
           @submit.prevent="handleSave"
         >
           <!-- Header -->
           <div class="px-5 py-3.5 border-b jd-border flex items-center justify-between gap-3 shrink-0">
             <div class="min-w-0">
-              <h2 class="text-sm font-semibold jd-text">{{ t('偏好设置') }}</h2>
+              <h2 :id="titleId" class="text-sm font-semibold jd-text">{{ t('偏好设置') }}</h2>
               <p class="text-[11px] jd-subtle mt-0.5">{{ t('修改后点击保存才会写入 config.json') }}</p>
             </div>
             <button
               type="button"
+              :aria-label="t('关闭')"
               :title="t('关闭')"
               class="w-7 h-7 rounded-lg flex items-center justify-center jd-muted jd-hover transition-colors shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/70"
               @click="handleClose"
@@ -823,7 +915,7 @@ onBeforeUnmount(() => {
           </div>
 
           <!-- Scrollable body -->
-          <div class="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-5 py-4 space-y-5 text-xs">
+          <div ref="bodyRef" class="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-5 py-4 space-y-5 text-xs">
             <!-- 呼出 -->
             <section class="space-y-2.5">
               <div class="flex items-center gap-2">

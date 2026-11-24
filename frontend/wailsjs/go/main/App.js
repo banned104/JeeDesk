@@ -122,6 +122,10 @@ export function OpenLogFile() {
   return window['go']['main']['App']['OpenLogFile']();
 }
 
+export function OpenURL(arg1) {
+  return window['go']['main']['App']['OpenURL'](arg1);
+}
+
 export function PickDirectory(arg1) {
   return window['go']['main']['App']['PickDirectory'](arg1);
 }
@@ -176,6 +180,10 @@ export function SetAutoStart(arg1) {
 
 export function SetCollapsedGroups(arg1) {
   return window['go']['main']['App']['SetCollapsedGroups'](arg1);
+}
+
+export function SetItemAdmin(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SetItemAdmin'](arg1, arg2, arg3);
 }
 
 export function SetModalOpen(arg1) {

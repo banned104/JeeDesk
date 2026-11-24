@@ -84,7 +84,7 @@ function isMissing(entry: DisplayItem): boolean {
 }
 
 function tileTitle(entry: DisplayItem): string {
-  const base = formatItemTooltip(entry.item);
+  const base = formatItemTooltip(entry.item, `${t('参数:')}:`);
   return isMissing(entry) ? `${t('目标不存在')}\n${base}` : base;
 }
 
@@ -209,7 +209,7 @@ defineExpose({ ensureSelectionVisible });
         draggable="true"
         :title="tileTitle(entry)"
         :class="[
-          'group relative flex flex-col items-center justify-start gap-2 p-2.5 rounded-xl border transition-all duration-150 focus:outline-none',
+          'group relative flex flex-col items-center justify-start gap-2 p-2.5 rounded-xl border transition-all duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400',
           index === selectedIndex
             ? 'jd-surface-strong jd-border-strong ring-1 ring-sky-400/70'
             : 'border-transparent jd-hover',

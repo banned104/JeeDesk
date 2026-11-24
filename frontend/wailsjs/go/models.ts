@@ -73,6 +73,7 @@ export namespace config {
 	    language: string;
 	    show_recent: boolean;
 	    collapsed_groups: string[];
+	    window_positioned: boolean;
 	    window_opacity: number;
 	    window_width: number;
 	    window_height: number;
@@ -100,6 +101,7 @@ export namespace config {
 	        this.language = source["language"];
 	        this.show_recent = source["show_recent"];
 	        this.collapsed_groups = source["collapsed_groups"];
+	        this.window_positioned = source["window_positioned"];
 	        this.window_opacity = source["window_opacity"];
 	        this.window_width = source["window_width"];
 	        this.window_height = source["window_height"];

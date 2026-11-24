@@ -11,6 +11,7 @@ registerTranslations({
   '取消': 'Cancel',
   '确定': 'OK',
   '提交中…': 'Submitting…',
+  '提交失败：{error}': 'Submit failed: {error}',
 });
 
 const props = defineProps<{
@@ -21,7 +22,10 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'close'): void;
-  (e: 'submit', name: string): void;
+  // `done` lets the parent report that its request settled (success or failure), so the confirm
+  // button is re-enabled at once instead of waiting out the fallback timer. Parents that ignore the
+  // extra argument keep working.
+  (e: 'submit', name: string, done: () => void): void;
 }>();
 
 const name = ref('');
@@ -97,14 +101,27 @@ function restoreFocus() {
 
 // Guards against creating the same group twice when the confirm button is pressed repeatedly.
 const submitting = ref(false);
-let releaseTimer: number | null = null;
+const submitError = ref('');
+// Fallback only: released by the parent (via `done`), by the dialog closing, or by an edit below.
+let fallbackTimer: number | null = null;
 
 function releaseSubmit() {
-  if (releaseTimer !== null) {
-    window.clearTimeout(releaseTimer);
-    releaseTimer = null;
+  if (fallbackTimer !== null) {
+    window.clearTimeout(fallbackTimer);
+    fallbackTimer = null;
   }
   submitting.value = false;
+}
+
+// Typing a new name means the user is starting another attempt, so the lock must not hold them back.
+watch(name, () => {
+  if (submitting.value) {
+    releaseSubmit();
+  }
+});
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 watch(
@@ -117,6 +134,7 @@ watch(
     }
     rememberFocus();
     releaseSubmit();
+    submitError.value = '';
     name.value = props.mode === 'rename' ? props.initialName || '' : '';
     await focusFirstField();
     inputRef.value?.select();
@@ -127,10 +145,20 @@ function handleSubmit() {
   const trimmed = name.value.trim();
   if (!trimmed || submitting.value) return;
   submitting.value = true;
-  emit('submit', trimmed);
-  // The parent owns the request: it closes this dialog on success and reports its own error on
-  // failure. The timer is a safety valve so a failed save never leaves the button stuck.
-  releaseTimer = window.setTimeout(releaseSubmit, 5000);
+  submitError.value = '';
+  try {
+    // The parent owns the request. It reports back through `done` when the request settles — also
+    // when it fails — which releases the button immediately so the user can retry without waiting.
+    emit('submit', trimmed, releaseSubmit);
+  } catch (err) {
+    // A parent that throws synchronously must never leave the button locked.
+    submitError.value = t('提交失败：{error}', { error: errorText(err) });
+    releaseSubmit();
+    return;
+  }
+  if (!submitting.value) return;
+  // Fallback only, for a parent that neither calls `done` nor closes the dialog on success.
+  fallbackTimer = window.setTimeout(releaseSubmit, 5000);
 }
 
 // Closing or unmounting must clear the pending timer and hand focus back to the page behind.
@@ -197,6 +225,14 @@ onBeforeUnmount(() => {
                 class="w-full h-9 px-3 rounded-xl jd-input border transition-colors select-text"
               />
             </label>
+
+            <p
+              v-if="submitError"
+              role="alert"
+              class="text-[11px] text-rose-300 bg-rose-500/10 border jd-border border rounded-xl px-3 py-2 select-text"
+            >
+              {{ submitError }}
+            </p>
 
             <div class="flex items-center justify-end gap-2">
               <button

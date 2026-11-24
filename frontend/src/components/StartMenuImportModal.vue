@@ -69,6 +69,71 @@ const selected = ref<Set<string>>(new Set());
 const searchRef = ref<HTMLInputElement | null>(null);
 const submitting = ref(false);
 
+// --- dialog focus management ----------------------------------------------
+
+const titleId = 'start-menu-import-modal-title';
+const dialogRef = ref<HTMLElement | null>(null);
+// Element that had focus before the dialog opened, restored once it closes.
+let previousFocus: HTMLElement | null = null;
+
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function focusableElements(): HTMLElement[] {
+  const root = dialogRef.value;
+  if (!root) return [];
+  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+    (el) => el.getClientRects().length > 0
+  );
+}
+
+// Simple focus trap: Tab / Shift+Tab cycle inside the dialog instead of reaching the page behind it.
+function handleTabKey(event: KeyboardEvent) {
+  if (event.key !== 'Tab') return;
+  const root = dialogRef.value;
+  if (!root) return;
+  const elements = focusableElements();
+  if (elements.length === 0) {
+    event.preventDefault();
+    root.focus();
+    return;
+  }
+  const first = elements[0];
+  const last = elements[elements.length - 1];
+  const active = document.activeElement;
+  if (event.shiftKey) {
+    if (active === first || !root.contains(active)) {
+      event.preventDefault();
+      last.focus();
+    }
+    return;
+  }
+  if (active === last || !root.contains(active)) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function rememberFocus() {
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && !dialogRef.value?.contains(active)) {
+    previousFocus = active;
+  }
+}
+
+function restoreFocus() {
+  const target = previousFocus;
+  previousFocus = null;
+  if (target && document.contains(target)) target.focus();
+}
+
+/** The shell handles Esc globally, so it calls this instead of flipping `visible` itself. */
+function handleClose() {
+  emit('close');
+}
+
+defineExpose({ handleClose });
+
 let busyTimer: number | undefined;
 
 const filteredEntries = computed(() => {
@@ -171,7 +236,11 @@ watch(
   () => props.visible,
   async (visible) => {
     releaseBusy();
-    if (!visible) return;
+    if (!visible) {
+      restoreFocus();
+      return;
+    }
+    rememberFocus();
     // A reopened dialog always starts clean; the parent keeps this component mounted between scans.
     selected.value = new Set();
     searchQuery.value = '';
@@ -199,6 +268,7 @@ watch(
 
 onBeforeUnmount(() => {
   clearBusyTimer();
+  restoreFocus();
 });
 </script>
 
@@ -211,21 +281,28 @@ onBeforeUnmount(() => {
         @mousedown.self="emit('close')"
       >
         <div
-          class="w-[560px] max-w-[calc(100vw-2rem)] h-[520px] max-h-[90vh] rounded-2xl glass-modal border jd-border-strong shadow-2xl overflow-hidden flex flex-col"
+          ref="dialogRef"
+          role="dialog"
+          aria-modal="true"
+          :aria-labelledby="titleId"
+          tabindex="-1"
+          class="w-[560px] max-w-[calc(100vw-2rem)] h-[520px] max-h-[90vh] rounded-2xl glass-modal border jd-border-strong shadow-2xl overflow-hidden flex flex-col focus:outline-none"
+          @keydown="handleTabKey"
         >
           <!-- Header -->
           <div class="px-5 py-3.5 border-b jd-border flex items-start justify-between gap-3 shrink-0">
             <div class="min-w-0">
-              <h2 class="text-sm font-semibold jd-text">{{ t('从开始菜单导入') }}</h2>
+              <h2 :id="titleId" class="text-sm font-semibold jd-text">{{ t('从开始菜单导入') }}</h2>
               <p class="mt-0.5 text-[11px] jd-subtle truncate" :title="groupName">
                 {{ t('选中要加入「{group}」的快捷方式', { group: groupName }) }}
               </p>
             </div>
             <button
               type="button"
+              :aria-label="t('关闭')"
               :title="t('关闭')"
               class="w-7 h-7 rounded-lg flex items-center justify-center jd-muted jd-hover transition-colors shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/70"
-              @click="emit('close')"
+              @click="handleClose"
             >
               <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path stroke-linecap="round" d="M18 6L6 18M6 6l12 12" />

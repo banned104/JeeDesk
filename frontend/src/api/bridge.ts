@@ -62,6 +62,8 @@ interface WailsGoApp {
   OpenLogFile(): Promise<void>;
   CheckUpdates(): Promise<UpdateInfo>;
   SetCollapsedGroups(ids: string[]): Promise<void>;
+  SetItemAdmin(groupID: string, itemID: string, admin: boolean): Promise<void>;
+  OpenURL(url: string): Promise<void>;
 }
 
 interface WailsRuntime {
@@ -296,15 +298,14 @@ export const bridge = {
       await app.UpdateItem(groupID, item);
       return;
     }
+    await mockDelay(60);
     const group = mockConfig.groups.find((g) => g.id === groupID);
-    if (group) {
-      const idx = group.items.findIndex((i) => i.id === item.id);
-      if (idx >= 0) {
-        group.items[idx] = { ...item };
-        emitMockEvent('config:updated', cloneConfig(mockConfig));
-        emitMockEvent('ui:toast', { type: 'success', message: `已保存 ${item.name}` } satisfies ToastPayload);
-      }
-    }
+    if (!group) throw new Error(`未找到分组 ${groupID}`);
+    const idx = group.items.findIndex((i) => i.id === item.id);
+    if (idx < 0) throw new Error(`未找到项目 ${item.id}`);
+    group.items[idx] = { ...item };
+    emitMockEvent('config:updated', cloneConfig(mockConfig));
+    emitMockEvent('ui:toast', { type: 'success', message: `已保存 ${item.name}` } satisfies ToastPayload);
   },
 
   async deleteItem(groupID: string, itemID: string): Promise<void> {
@@ -485,6 +486,7 @@ export const bridge = {
     if (app) {
       return await app.SearchItems(query);
     }
+    await mockDelay(70);
     return mockSearch(query);
   },
 
@@ -493,6 +495,7 @@ export const bridge = {
     if (app) {
       return await app.GetRecentItems(limit);
     }
+    await mockDelay(50);
     return mockRecent(limit);
   },
 
@@ -506,6 +509,20 @@ export const bridge = {
       delete mockUsage[key];
     }
     emitMockEvent('usage:updated');
+  },
+
+  /** Toggles only the admin flag so a partial item from search/recent cannot erase other fields. */
+  async setItemAdmin(groupID: string, itemID: string, admin: boolean): Promise<void> {
+    const app = getApp();
+    if (app) {
+      await app.SetItemAdmin(groupID, itemID, admin);
+      return;
+    }
+    const group = mockConfig.groups.find((g) => g.id === groupID);
+    const item = group?.items.find((i) => i.id === itemID);
+    if (!item) throw new Error(`未找到项目 ${itemID}`);
+    item.admin = admin;
+    emitMockEvent('config:updated', cloneConfig(mockConfig));
   },
 
   async moveItem(fromGroupID: string, itemID: string, toGroupID: string, toIndex: number): Promise<void> {
@@ -707,6 +724,16 @@ export const bridge = {
       return;
     }
     emitMockEvent('ui:toast', { type: 'success', message: '[Dev] 已重建 config.json' } satisfies ToastPayload);
+  },
+
+  /** Opens an http(s) link in the system browser. */
+  async openUrl(url: string): Promise<void> {
+    const app = getApp();
+    if (app) {
+      await app.OpenURL(url);
+      return;
+    }
+    emitMockEvent('ui:toast', { type: 'info', message: `[Dev] 打开链接: ${url}` } satisfies ToastPayload);
   },
 
   async openLogFile(): Promise<void> {

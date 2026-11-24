@@ -24,6 +24,8 @@ var assets embed.FS
 func main() {
 	baseDir := resolveBaseDir()
 	app := NewApp(baseDir)
+	// Load the config before anything can run concurrently with OnStartup.
+	app.loadConfig()
 
 	si, isPrimary, err := AcquireSingleInstance(
 		singleInstanceMutexName,

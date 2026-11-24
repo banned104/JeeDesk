@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -715,5 +717,65 @@ func TestManualReloadRetriesUnregisteredHotkey(t *testing.T) {
 	}
 	if st := app.GetHotkeyStatus(); !st.Registered || st.Hotkey != testHotkeyHeld {
 		t.Fatalf("expected %s to be registered after a manual reload, got %+v", testHotkeyHeld, st)
+	}
+}
+
+func TestContextAccessIsSynchronised(t *testing.T) {
+	app, _ := newTestApp(t)
+	if got := app.context(); got != nil {
+		t.Fatalf("context before startup = %v, want nil", got)
+	}
+
+	// Wails calls OnStartup on its own goroutine while the single-instance wake callback may
+	// already be reading the context. Run both against each other; the race detector judges the pairing.
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	for i := 0; i < 200; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			app.setContext(ctx)
+		}()
+		go func() {
+			defer wg.Done()
+			_ = app.context()
+		}()
+	}
+	wg.Wait()
+
+	if got := app.context(); got != ctx {
+		t.Fatalf("context after startup = %v, want %v", got, ctx)
+	}
+}
+
+func TestLoadConfigKeepsManagerUsableWhenConfigBroken(t *testing.T) {
+	dir := t.TempDir()
+	broken := []byte(`{"settings": { broken`)
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), broken, 0o644); err != nil {
+		t.Fatalf("write broken config: %v", err)
+	}
+
+	// This is the startup sequence from main: the config is loaded before the app runs.
+	app := NewApp(dir)
+	app.loadConfig()
+	t.Cleanup(func() { _ = app.cfgMgr.Close() })
+
+	if app.cfgMgr == nil {
+		t.Fatal("expected a usable manager despite the load error")
+	}
+	if app.configLoadErr == nil {
+		t.Fatal("expected the load error to be kept for startup to report")
+	}
+
+	// The manager startup relies on is the one that refuses to write over the broken file.
+	if err := app.AddGroup("不会写入"); !errors.Is(err, config.ErrWriteBlocked) {
+		t.Fatalf("expected ErrWriteBlocked, got %v", err)
+	}
+	got, err := os.ReadFile(app.configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if !bytes.Equal(got, broken) {
+		t.Fatalf("broken config.json was overwritten:\n%s", got)
 	}
 }

@@ -41,12 +41,18 @@ type HotkeyStatus struct {
 
 // App exposes JeeDesk backend capabilities to the Wails v2 frontend.
 type App struct {
+	// ctx is written by OnStartup, which Wails calls on its own goroutine while the single-instance
+	// wake callback may already be running. All access goes through setContext and context.
+	ctxMu      sync.RWMutex
 	ctx        context.Context
 	baseDir    string
 	configPath string
 	iconsDir   string
 
-	cfgMgr    *config.Manager
+	// cfgMgr and configLoadErr are set by loadConfig before any other goroutine exists.
+	cfgMgr        *config.Manager
+	configLoadErr error
+
 	hotkeyMgr *hook.HotkeyManager
 	mouseMgr  *hook.MouseHookManager
 
@@ -99,12 +105,30 @@ func NewApp(baseDir string) *App {
 	}
 }
 
-func (a *App) startup(ctx context.Context) {
-	a.ctx = ctx
-
+// loadConfig creates the config manager before any other goroutine exists, so cfgMgr never needs
+// synchronising. A load failure is kept for startup to report.
+func (a *App) loadConfig() {
 	mgr, err := config.NewManagerWithFallback(a.configPath, a.onConfigUpdated, a.onConfigError)
 	a.cfgMgr = mgr
-	if err != nil {
+	a.configLoadErr = err
+}
+
+func (a *App) setContext(ctx context.Context) {
+	a.ctxMu.Lock()
+	a.ctx = ctx
+	a.ctxMu.Unlock()
+}
+
+func (a *App) context() context.Context {
+	a.ctxMu.RLock()
+	defer a.ctxMu.RUnlock()
+	return a.ctx
+}
+
+func (a *App) startup(ctx context.Context) {
+	a.setContext(ctx)
+
+	if err := a.configLoadErr; err != nil {
 		log.Printf("[config] initial load error: %v", err)
 		a.setStartupNotice(fmt.Sprintf("配置文件加载异常: %v", err))
 		a.onConfigError(err)
@@ -246,8 +270,8 @@ func (a *App) shutdown(_ context.Context) {
 // Quit exits JeeDesk cleanly from the system tray.
 func (a *App) Quit() {
 	a.quitting.Store(true)
-	if a.ctx != nil {
-		runtime.Quit(a.ctx)
+	if ctx := a.context(); ctx != nil {
+		runtime.Quit(ctx)
 	}
 }
 
@@ -268,10 +292,11 @@ func (a *App) setStartupNotice(msg string) {
 }
 
 func (a *App) emitEvent(name string, data ...interface{}) {
-	if a.ctx == nil {
+	ctx := a.context()
+	if ctx == nil {
 		return
 	}
-	runtime.EventsEmit(a.ctx, name, data...)
+	runtime.EventsEmit(ctx, name, data...)
 }
 
 func (a *App) emitToast(level, message string) {
@@ -502,10 +527,11 @@ func (a *App) ShowWindow() {
 	a.lastShown = time.Now()
 	a.stateMu.Unlock()
 
-	if a.ctx == nil {
+	ctx := a.context()
+	if ctx == nil {
 		return
 	}
-	runtime.WindowShow(a.ctx)
+	runtime.WindowShow(ctx)
 	a.startBlurMonitor()
 
 	go func() {
@@ -528,10 +554,11 @@ func (a *App) HideWindow() {
 	a.visible = false
 	a.stateMu.Unlock()
 
-	if a.ctx == nil {
+	ctx := a.context()
+	if ctx == nil {
 		return
 	}
-	runtime.WindowHide(a.ctx)
+	runtime.WindowHide(ctx)
 }
 
 // ToggleWindow toggles JeeDesk window visibility, bringing an unfocused
@@ -916,7 +943,8 @@ func (a *App) OpenConfigFile() error {
 
 // PickFile opens a native Windows file chooser while suppressing hide_on_blur.
 func (a *App) PickFile(title string, filterName string, pattern string) (string, error) {
-	if a.ctx == nil {
+	ctx := a.context()
+	if ctx == nil {
 		return "", errors.New("应用上下文未初始化")
 	}
 
@@ -942,12 +970,13 @@ func (a *App) PickFile(title string, filterName string, pattern string) (string,
 		}
 	}
 
-	return runtime.OpenFileDialog(a.ctx, opts)
+	return runtime.OpenFileDialog(ctx, opts)
 }
 
 // PickDirectory opens a native Windows folder chooser while suppressing hide_on_blur.
 func (a *App) PickDirectory(title string) (string, error) {
-	if a.ctx == nil {
+	ctx := a.context()
+	if ctx == nil {
 		return "", errors.New("应用上下文未初始化")
 	}
 
@@ -959,7 +988,7 @@ func (a *App) PickDirectory(title string) (string, error) {
 		a.dialogOpen.Store(false)
 	}()
 
-	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+	return runtime.OpenDirectoryDialog(ctx, runtime.OpenDialogOptions{
 		Title: title,
 	})
 }

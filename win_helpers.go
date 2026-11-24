@@ -28,6 +28,8 @@ var (
 	procGetWindowThreadProcID = modUser32.NewProc("GetWindowThreadProcessId")
 	procAttachThreadInput     = modUser32.NewProc("AttachThreadInput")
 	procMessageBoxW           = modUser32.NewProc("MessageBoxW")
+	procIsWindow              = modUser32.NewProc("IsWindow")
+	procMonitorFromPoint      = modUser32.NewProc("MonitorFromPoint")
 )
 
 const (
@@ -66,6 +68,10 @@ var (
 	enumMainTarget uint32
 	enumMainResult uintptr
 	enumMainProc   = windows.NewCallback(enumMainWailsWindowProc)
+
+	// cachedMainHwnd spares the 80ms visibility poller a full EnumWindows sweep. It is dropped as
+	// soon as IsWindow reports the handle is gone, which is when the window is recreated.
+	cachedMainHwnd uintptr
 )
 
 func enumMainWailsWindowProc(hwnd, _ uintptr) uintptr {
@@ -92,10 +98,18 @@ func findMainWailsWindow() uintptr {
 	enumMainMu.Lock()
 	defer enumMainMu.Unlock()
 
+	if cachedMainHwnd != 0 {
+		if alive, _, _ := procIsWindow.Call(cachedMainHwnd); alive != 0 {
+			return cachedMainHwnd
+		}
+		cachedMainHwnd = 0
+	}
+
 	enumMainTarget = uint32(os.Getpid())
 	enumMainResult = 0
 	procEnumWindows.Call(enumMainProc, 0)
-	return enumMainResult
+	cachedMainHwnd = enumMainResult
+	return cachedMainHwnd
 }
 
 func isWindowVisible(hwnd uintptr) bool {
@@ -258,6 +272,18 @@ func windowRectOf(hwnd uintptr) (winRECT, bool) {
 	return rect, true
 }
 
+// monitorWorkArea reports the work area of a monitor handle.
+func monitorWorkArea(monitor uintptr) (winRECT, bool) {
+	if monitor == 0 {
+		return winRECT{}, false
+	}
+	info := winMONITORINFO{cbSize: uint32(unsafe.Sizeof(winMONITORINFO{}))}
+	if r, _, _ := procGetMonitorInfoW.Call(monitor, uintptr(unsafe.Pointer(&info))); r == 0 {
+		return winRECT{}, false
+	}
+	return info.rcWork, true
+}
+
 // workAreaOf reports the desktop area of the monitor the window is on, excluding the taskbar.
 func workAreaOf(hwnd uintptr) (winRECT, bool) {
 	monitor, _, _ := procMonitorFromWindow.Call(hwnd, monitorDefaultToNearest)
@@ -299,6 +325,34 @@ func ensureWindowReachable(hwnd uintptr) {
 	x := work.Left + (work.Right-work.Left-width)/2
 	y := work.Top + (work.Bottom-work.Top-height)/2
 	moveWindowTo(hwnd, x, y)
+}
+
+// centerOnCursorMonitor centers the window on the work area of the monitor holding the cursor, so
+// a hotkey press on a second screen opens the panel on that screen.
+func centerOnCursorMonitor(hwnd uintptr) {
+	if hwnd == 0 {
+		return
+	}
+	x, y, ok := cursorPosition()
+	if !ok {
+		return
+	}
+	var point winPOINT
+	point.X, point.Y = x, y
+	monitor, _, _ := procMonitorFromPoint.Call(uintptr(unsafe.Pointer(&point)), monitorDefaultToNearest)
+	work, ok := monitorWorkArea(monitor)
+	if !ok {
+		return
+	}
+	rect, ok := windowRectOf(hwnd)
+	if !ok {
+		return
+	}
+	width := rect.Right - rect.Left
+	height := rect.Bottom - rect.Top
+	targetX := work.Left + (work.Right-work.Left-width)/2
+	targetY := work.Top + (work.Bottom-work.Top-height)/2
+	moveWindowTo(hwnd, targetX, targetY)
 }
 
 // cursorPosition reports the current mouse position in screen coordinates.

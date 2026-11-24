@@ -125,6 +125,14 @@ func (m *Manager) SetRemovedHandler(fn func()) {
 	m.mu.Unlock()
 }
 
+// Settings returns a copy of the current settings. It is much cheaper than Get and is what the
+// window-visibility poller reads several times per second.
+func (m *Manager) Settings() Settings {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.current.Settings
+}
+
 // Get returns a deep copy of the current valid in-memory configuration.
 func (m *Manager) Get() Config {
 	m.mu.RLock()
@@ -326,6 +334,14 @@ func (m *Manager) Close() error {
 	return closeErr
 }
 
+// confirmRemoved waits out the short window in which a replacing write looks like a deletion and
+// reports whether the configuration file is really gone.
+func (m *Manager) confirmRemoved(targetBase string) bool {
+	time.Sleep(150 * time.Millisecond)
+	_, err := os.Stat(filepath.Join(targetBase, filepath.Base(m.path)))
+	return errors.Is(err, os.ErrNotExist)
+}
+
 func (m *Manager) watchLoop(watcher *fsnotify.Watcher, stopCh <-chan struct{}, doneCh chan<- struct{}, targetBase string) {
 	var timer *time.Timer
 	var timerC <-chan time.Time
@@ -347,6 +363,11 @@ func (m *Manager) watchLoop(watcher *fsnotify.Watcher, stopCh <-chan struct{}, d
 				return
 			}
 			if isConfigRemoval(event, targetBase) {
+				// A save that replaces the file also surfaces as a removal on Windows, so the
+				// handler only runs when the path is really gone after the write settles.
+				if !m.confirmRemoved(targetBase) {
+					continue
+				}
 				m.mu.RLock()
 				handler := m.onRemoved
 				m.mu.RUnlock()

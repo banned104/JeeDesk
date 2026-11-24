@@ -253,24 +253,25 @@ func expandEnvVars(s string) string {
 	return windows.UTF16ToString(buf[:n])
 }
 
+// uriSchemes are the protocols ShellExecute is expected to hand to a registered handler. Anything
+// else that merely contains a colon is treated as a path, which keeps a stray "C:notes.txt" from
+// being launched as a protocol.
+var uriSchemes = map[string]bool{
+	"http": true, "https": true, "file": true, "ftp": true, "mailto": true, "tel": true,
+	"ms-settings": true, "ms-windows-store": true, "ms-gamebar": true, "steam": true,
+	"discord": true, "spotify": true,
+}
+
 func isURI(s string) bool {
-	if strings.Contains(s, "://") {
-		return true
+	if idx := strings.Index(s, "://"); idx > 0 {
+		return uriSchemes[strings.ToLower(s[:idx])]
 	}
 	colonIdx := strings.IndexByte(s, ':')
 	// Require at least 2 scheme characters so Windows drive letters (e.g. C:\) are not treated as URIs.
 	if colonIdx <= 1 {
 		return false
 	}
-	scheme := s[:colonIdx]
-	for i := 0; i < len(scheme); i++ {
-		c := scheme[i]
-		isAlphaNum := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
-		if !isAlphaNum && c != '+' && c != '-' && c != '.' {
-			return false
-		}
-	}
-	return true
+	return uriSchemes[strings.ToLower(s[:colonIdx])]
 }
 
 func findPowerShell() string {

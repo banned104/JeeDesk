@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"jeedesk/internal/applog"
 	"jeedesk/internal/autostart"
 	"jeedesk/internal/config"
 	"jeedesk/internal/launcher"
@@ -69,6 +70,7 @@ type AppInfo struct {
 	ConfigPath     string `json:"config_path"`
 	ConfigBackup   string `json:"config_backup"`
 	IconsDir       string `json:"icons_dir"`
+	LogPath        string `json:"log_path"`
 	ExePath        string `json:"exe_path"`
 	AutoStart      bool   `json:"auto_start"`
 	AutoStartError string `json:"auto_start_error"`
@@ -499,6 +501,7 @@ func (a *App) GetAppInfo() AppInfo {
 		ConfigPath:   a.configPath,
 		ConfigBackup: config.BackupPath(a.configPath),
 		IconsDir:     a.iconsDir,
+		LogPath:      applog.LogPath(a.baseDir),
 	}
 	if exe, err := autostart.CurrentExe(); err == nil {
 		info.ExePath = exe
@@ -614,9 +617,6 @@ func (a *App) ImportConfig() (int, error) {
 // The frontend calls it once after mounting.
 func (a *App) ApplyWindowState() {
 	cfg := a.GetConfig()
-	if cfg.Settings.WindowX == 0 && cfg.Settings.WindowY == 0 {
-		return
-	}
 	go func() {
 		time.Sleep(60 * time.Millisecond)
 		if a.findMainHwndFn == nil {
@@ -624,6 +624,12 @@ func (a *App) ApplyWindowState() {
 		}
 		hwnd := a.findMainHwndFn()
 		if hwnd == 0 {
+			return
+		}
+		if cfg.Settings.WindowX == 0 && cfg.Settings.WindowY == 0 {
+			// No saved position: appear on the monitor the cursor is on, which is where the user
+			// pressed the hotkey when several screens are attached.
+			centerOnCursorMonitor(hwnd)
 			return
 		}
 		moveWindowTo(hwnd, int32(cfg.Settings.WindowX), int32(cfg.Settings.WindowY))
@@ -718,12 +724,13 @@ func lookupItem(cfg config.Config, groupID, itemID string) (string, config.Group
 
 // withDialog suppresses hide_on_blur while a native dialog is open.
 func (a *App) withDialog(open func() (string, error)) (string, error) {
+	previous := a.dialogOpen.Load()
 	a.dialogOpen.Store(true)
 	defer func() {
 		a.stateMu.Lock()
 		a.lastShown = time.Now()
 		a.stateMu.Unlock()
-		a.dialogOpen.Store(false)
+		a.dialogOpen.Store(previous)
 	}()
 	return open()
 }

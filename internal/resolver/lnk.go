@@ -84,6 +84,17 @@ func ResolvePath(inputPath string) (ResolvedTarget, error) {
 	}, nil
 }
 
+// DisplayName derives the item name JeeDesk shows for a path: the file name without the
+// extension, a folder name as is, and a shortcut dropped ".lnk". AddItem and the drop handler share
+// it so a manually added target and a dropped one get the same name.
+func DisplayName(path string) string {
+	cleaned := strings.TrimRight(strings.TrimSpace(path), `\/`)
+	if cleaned == "" {
+		return strings.TrimSpace(path)
+	}
+	return defaultDisplayName(cleaned)
+}
+
 func defaultDisplayName(cleaned string) string {
 	base := filepath.Base(cleaned)
 	ext := filepath.Ext(base)

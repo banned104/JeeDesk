@@ -1,9 +1,13 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -12,9 +16,7 @@ import (
 )
 
 const (
-	singleInstanceMutexName  = "Local\\JeeDesk-SingleInstance-Mutex-v1"
-	singleInstanceClassName  = "JeeDesk-SingleInstance-IPC-Class"
-	singleInstanceWindowName = "JeeDesk-SingleInstance-IPC-Window"
+	singleInstancePrefix = "JeeDesk-SingleInstance"
 
 	wmJeeDeskShow = 0x8000 + 42 // WM_APP + 42
 	hwndMessage   = ^uintptr(2) // HWND_MESSAGE = (HWND)-3
@@ -101,6 +103,18 @@ func singleInstanceWndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 	}
 	ret, _, _ := procDefWindowProcW.Call(hwnd, msg, wParam, lParam)
 	return ret
+}
+
+// SingleInstanceNames ties one running copy to one data directory. Deriving them from baseDir lets
+// a portable copy next to another config.json run side by side with the installed one, while two
+// launches pointing at the same config.json still wake each other.
+func SingleInstanceNames(baseDir string) (mutexName, className, windowName string) {
+	normalized := strings.ToLower(filepath.Clean(strings.TrimSpace(baseDir)))
+	sum := sha256.Sum256([]byte(normalized))
+	suffix := hex.EncodeToString(sum[:6])
+	return `Local\` + singleInstancePrefix + "-Mutex-" + suffix,
+		fmt.Sprintf("%s-IPC-Class-%s", singleInstancePrefix, suffix),
+		fmt.Sprintf("%s-IPC-Window-%s", singleInstancePrefix, suffix)
 }
 
 // AcquireSingleInstance acquires the named Win32 single-instance mutex.

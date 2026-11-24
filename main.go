@@ -14,6 +14,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 
+	"jeedesk/internal/applog"
 	"jeedesk/internal/config"
 	"jeedesk/internal/resolver"
 )
@@ -28,7 +29,22 @@ const (
 
 func main() {
 	baseDir := resolveBaseDir()
+
+	// A GUI build has no console, so the log file is the only trace of a failed startup. It is
+	// opened before anything else can fail.
+	if path, closeLog, err := applog.Setup(baseDir); err != nil {
+		log.Printf("[app] cannot open log file: %v", err)
+	} else {
+		defer closeLog()
+		log.Printf("[app] JeeDesk %s starting, base dir %s, log %s", appVersion, baseDir, path)
+	}
+
+	// A marker left behind by the previous run means it never shut down cleanly. Only the primary
+	// instance owns it: a second launch that wakes the running copy must not clear it.
+	startedAfterCrash := applog.PreviousRunCrashed(baseDir)
+
 	app := NewApp(baseDir)
+	app.previousRunCrashed = startedAfterCrash
 	// Load the config before anything can run concurrently with OnStartup.
 	app.loadConfig()
 
@@ -37,12 +53,8 @@ func main() {
 	bootCfg := app.GetConfig()
 	width, height, startHidden, theme := bootWindowOptions(bootCfg.Settings)
 
-	si, isPrimary, err := AcquireSingleInstance(
-		singleInstanceMutexName,
-		singleInstanceClassName,
-		singleInstanceWindowName,
-		app.ShowWindow,
-	)
+	mutexName, className, windowName := SingleInstanceNames(baseDir)
+	si, isPrimary, err := AcquireSingleInstance(mutexName, className, windowName, app.ShowWindow)
 	if err != nil {
 		log.Printf("[single-instance] acquire failed: %v", err)
 	} else if !isPrimary {
@@ -51,6 +63,8 @@ func main() {
 	if si != nil {
 		defer si.Close()
 	}
+	_ = applog.WriteMarker(baseDir)
+	defer applog.ClearMarker(baseDir)
 
 	err = wails.Run(&options.App{
 		Title:            "JeeDesk",
@@ -88,7 +102,9 @@ func main() {
 		},
 	})
 	if err != nil {
-		log.Fatalf("JeeDesk failed to start: %v", err)
+		log.Printf("[app] JeeDesk failed to start: %v", err)
+		applog.RecordPanic(baseDir, err)
+		os.Exit(1)
 	}
 }
 
@@ -117,7 +133,16 @@ func bootWindowOptions(settings config.Settings) (width, height int, startHidden
 }
 
 // resolveBaseDir picks the directory that holds config.json and icons/.
+// JEEDESK_BASE_DIR overrides the automatic choice, which is what a portable copy or a test run
+// with its own data directory needs.
 func resolveBaseDir() string {
+	if dir := strings.TrimSpace(os.Getenv("JEEDESK_BASE_DIR")); dir != "" {
+		if abs, err := filepath.Abs(dir); err == nil {
+			return abs
+		}
+		return dir
+	}
+
 	cwd, cwdErr := os.Getwd()
 	exePath, exeErr := os.Executable()
 	return pickBaseDir(cwd, cwdErr == nil, exePath, exeErr == nil)
@@ -129,6 +154,10 @@ func resolveBaseDir() string {
 func pickBaseDir(cwd string, cwdOK bool, exePath string, exeOK bool) string {
 	if !cwdOK {
 		cwd = ""
+	}
+	// JEEDESK_DEV=1 marks a developer run explicitly instead of guessing from the binary path.
+	if cwd != "" && strings.TrimSpace(os.Getenv("JEEDESK_DEV")) == "1" {
+		return cwd
 	}
 	if cwd != "" && config.LooksLikeConfig(filepath.Join(cwd, "config.json")) {
 		return cwd
@@ -190,6 +219,18 @@ func newIconMiddleware(iconsDir string) assetserver.Middleware {
 	}
 }
 
+// safeCustomIconPath keeps the custom icon endpoint to ordinary local files: an absolute path with
+// no device or UNC prefix, so a crafted URL cannot reach a named pipe or a network share.
+func safeCustomIconPath(rawPath string) bool {
+	if !filepath.IsAbs(rawPath) {
+		return false
+	}
+	if strings.HasPrefix(rawPath, `\\`) || strings.HasPrefix(rawPath, `//`) {
+		return false
+	}
+	return filepath.VolumeName(rawPath) != ""
+}
+
 func serveCachedIcon(w http.ResponseWriter, r *http.Request, iconsDir string) {
 	rel := strings.TrimPrefix(r.URL.Path, "/icons/")
 	if rel == "" || strings.ContainsAny(rel, `/\`) || rel == "." || rel == ".." {
@@ -219,7 +260,7 @@ func serveCachedIcon(w http.ResponseWriter, r *http.Request, iconsDir string) {
 
 func serveCustomIcon(w http.ResponseWriter, r *http.Request, iconsDir string) {
 	rawPath := strings.TrimSpace(r.URL.Query().Get("path"))
-	if rawPath == "" {
+	if rawPath == "" || !safeCustomIconPath(rawPath) {
 		http.NotFound(w, r)
 		return
 	}

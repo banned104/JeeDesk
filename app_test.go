@@ -698,25 +698,34 @@ func TestHotkeyStatusFollowsActualRegistration(t *testing.T) {
 	}
 }
 
-func TestManualReloadRetriesUnregisteredHotkey(t *testing.T) {
+func TestSaveSettingsRejectsHotkeyThatCannotRegister(t *testing.T) {
 	app, _, _ := newHotkeyTestApp(t)
 	holder := holdHotkey(t, testHotkeyHeld)
 
-	// The configured hotkey is already taken when it is first applied.
-	if err := app.SaveSettings(config.Settings{Hotkey: testHotkeyHeld, MouseTrigger: "none"}); err != nil {
-		t.Fatalf("SaveSettings failed: %v", err)
+	// A hotkey another program holds must not be written: the dialog stays open and the file
+	// keeps the working hotkey, which is what the user still has.
+	before := app.GetConfig().Settings.Hotkey
+	err := app.SaveSettings(config.Settings{Hotkey: testHotkeyHeld, MouseTrigger: "none"})
+	if err == nil {
+		t.Fatalf("expected SaveSettings to fail for the held hotkey")
 	}
-	if app.GetHotkeyStatus().Registered {
-		t.Fatalf("expected the held hotkey not to be registered, got %+v", app.GetHotkeyStatus())
+	if got := app.GetConfig().Settings.Hotkey; got != before {
+		t.Fatalf("stored hotkey = %q, want unchanged %q", got, before)
+	}
+	if st := app.GetHotkeyStatus(); st.Hotkey != before {
+		t.Fatalf("expected the reported hotkey to stay %s, got %+v", before, st)
 	}
 
-	// Once it is released, a manual reload registers it.
+	// Once the key is released the same save works and is persisted.
 	holder.Stop()
-	if err := app.ReloadConfig(); err != nil {
-		t.Fatalf("ReloadConfig failed: %v", err)
+	if err := app.SaveSettings(config.Settings{Hotkey: testHotkeyHeld, MouseTrigger: "none"}); err != nil {
+		t.Fatalf("SaveSettings after release failed: %v", err)
+	}
+	if got := app.GetConfig().Settings.Hotkey; got != testHotkeyHeld {
+		t.Fatalf("stored hotkey = %q, want %q", got, testHotkeyHeld)
 	}
 	if st := app.GetHotkeyStatus(); !st.Registered || st.Hotkey != testHotkeyHeld {
-		t.Fatalf("expected %s to be registered after a manual reload, got %+v", testHotkeyHeld, st)
+		t.Fatalf("expected %s to be registered, got %+v", testHotkeyHeld, st)
 	}
 }
 

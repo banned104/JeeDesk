@@ -114,6 +114,14 @@ func ExtractAndCacheIcon(targetPath string, iconsDir string) (string, error) {
 		return "", fmt.Errorf("create icons dir: %w", err)
 	}
 
+	// The cache key is the target path, so an existing PNG is the icon for this target. Hitting
+	// it avoids re-extracting the same icon on every panel refresh.
+	filename := IconHash(cleanedTarget) + ".png"
+	outPath := filepath.Join(iconsDir, filename)
+	if info, statErr := os.Stat(outPath); statErr == nil && info.Mode().IsRegular() && info.Size() > 0 {
+		return "icons/" + filename, nil
+	}
+
 	hIcon, err := extractWin32Icon(cleanedTarget)
 	if err != nil {
 		return "", err
@@ -125,8 +133,6 @@ func ExtractAndCacheIcon(targetPath string, iconsDir string) (string, error) {
 		return "", err
 	}
 
-	filename := IconHash(cleanedTarget) + ".png"
-	outPath := filepath.Join(iconsDir, filename)
 	if err := writePNGAtomic(iconsDir, outPath, img); err != nil {
 		return "", err
 	}

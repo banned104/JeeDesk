@@ -10,11 +10,13 @@ import (
 
 // Callbacks defines the actions triggered by system tray interactions and menu items.
 type Callbacks struct {
-	OnToggle     func()
-	OnSettings   func()
-	OnOpenConfig func()
-	OnReload     func()
-	OnQuit       func()
+	OnToggle      func()
+	OnSettings    func()
+	OnOpenConfig  func()
+	OnOpenBaseDir func()
+	OnOpenLog     func()
+	OnReload      func()
+	OnQuit        func()
 }
 
 var (
@@ -68,6 +70,8 @@ func onReady(cb Callbacks) {
 	bindMenuItem("设置", "打开 JeeDesk 设置", cb.OnSettings)
 	systray.AddSeparator()
 	bindMenuItem("打开 config.json", "在默认编辑器中打开配置文件", cb.OnOpenConfig)
+	bindMenuItem("打开数据目录", "在资源管理器中打开 JeeDesk 数据目录", cb.OnOpenBaseDir)
+	bindMenuItem("查看日志", "打开 logs/app.log", cb.OnOpenLog)
 	bindMenuItem("手动重载配置", "立即重新读取 config.json", cb.OnReload)
 	systray.AddSeparator()
 	bindMenuItem("退出程序", "退出 JeeDesk", cb.OnQuit)

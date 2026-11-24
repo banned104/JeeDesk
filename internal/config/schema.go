@@ -39,6 +39,10 @@ var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 type Config struct {
 	Settings Settings `json:"settings"`
 	Groups   []Group  `json:"groups"`
+
+	// Warnings collects problems Normalize found while repairing values read from disk. They are
+	// never serialized; the application shows them so a typo in config.json is not silent.
+	Warnings []string `json:"-"`
 }
 
 // Settings holds global hotkey, mouse trigger, launch, and window options.
@@ -52,6 +56,9 @@ type Settings struct {
 	HideOnLaunch bool `json:"hide_on_launch"`
 	HideOnBlur   bool `json:"hide_on_blur"`
 	HideOnEsc    bool `json:"hide_on_esc"`
+	// StrictBlur hides the window even while the cursor rests over it. Without it, leaving the
+	// cursor on the panel keeps the window open after another application takes the foreground.
+	StrictBlur bool `json:"hide_on_blur_strict"`
 
 	// ClickMode decides whether a single or a double click launches an item.
 	ClickMode string `json:"click_mode"`
@@ -64,6 +71,9 @@ type Settings struct {
 	Theme  string `json:"theme"`
 	Lang   string `json:"language"`
 	Recent bool   `json:"show_recent"`
+
+	// CollapsedGroups remembers which sidebar groups the user folded away.
+	CollapsedGroups []string `json:"collapsed_groups"`
 
 	// WindowOpacity is a percentage, WindowWidth and WindowHeight are device independent
 	// pixels with 0 meaning the default size. WindowX and WindowY are the last window
@@ -127,12 +137,14 @@ func Normalize(cfg *Config) {
 	if cfg == nil {
 		return
 	}
+	cfg.Warnings = nil
 
 	if strings.TrimSpace(cfg.Settings.Hotkey) == "" {
 		cfg.Settings.Hotkey = DefaultHotkey
 	}
 
-	switch strings.ToLower(strings.TrimSpace(cfg.Settings.MouseTrigger)) {
+	rawMouseTrigger := strings.TrimSpace(cfg.Settings.MouseTrigger)
+	switch strings.ToLower(rawMouseTrigger) {
 	case "none":
 		cfg.Settings.MouseTrigger = "none"
 	case "middle":
@@ -143,6 +155,9 @@ func Normalize(cfg *Config) {
 		cfg.Settings.MouseTrigger = "xbutton2"
 	default:
 		cfg.Settings.MouseTrigger = DefaultMouseTrigger
+		if rawMouseTrigger != "" {
+			cfg.Warnings = append(cfg.Warnings, fmt.Sprintf("鼠标呼出设置 %q 无法识别，已回退到 none", rawMouseTrigger))
+		}
 	}
 
 	switch strings.ToLower(strings.TrimSpace(cfg.Settings.ClickMode)) {
@@ -199,6 +214,10 @@ func Normalize(cfg *Config) {
 	}
 	if cfg.Settings.WindowY < 0 {
 		cfg.Settings.WindowY = 0
+	}
+
+	if cfg.Settings.CollapsedGroups == nil {
+		cfg.Settings.CollapsedGroups = []string{}
 	}
 
 	if cfg.Groups == nil {

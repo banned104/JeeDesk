@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -27,9 +28,12 @@ const (
 	blurGracePeriod     = 400 * time.Millisecond
 	blurMonitorInterval = 80 * time.Millisecond
 	windowSaveDelay     = 600 * time.Millisecond
-	appVersion          = "1.0.0"
 	recentItemsLimit    = 12
 )
+
+// appVersion is reported in the about section and compared against the latest release. Release
+// builds override it with -ldflags "-X main.appVersion=<version>".
+var appVersion = "1.0.0"
 
 type toastPayload struct {
 	Type    string `json:"type"`
@@ -69,15 +73,20 @@ type App struct {
 	windowSaveMu    sync.Mutex
 	windowSaveTimer *time.Timer
 
+	iconFillMu    sync.Mutex
+	iconFillTimer *time.Timer
+
 	activeGroupMu sync.RWMutex
 	activeGroupID string
 
-	stateMu    sync.Mutex
-	visible    bool
-	lastShown  time.Time
-	dialogOpen atomic.Bool
-	quitting   atomic.Bool
-	domReadyOK atomic.Bool
+	stateMu   sync.Mutex
+	visible   bool
+	lastShown time.Time
+	// previousRunCrashed is set by main when the marker from the last run was still on disk.
+	previousRunCrashed bool
+	dialogOpen         atomic.Bool
+	quitting           atomic.Bool
+	domReadyOK         atomic.Bool
 
 	blurMu     sync.Mutex
 	blurStopCh chan struct{}
@@ -228,10 +237,29 @@ func (a *App) startup(ctx context.Context) {
 
 	// Start watching only now: the watcher may deliver settings that need both hook managers.
 	if mgr := a.configManager(); mgr != nil {
+		// Losing config.json is not an edit the UI can render; it needs a banner so deleting the
+		// file by accident is visible instead of silently reverting to the in-memory copy.
+		mgr.SetRemovedHandler(func() {
+			a.emitEvent("config:removed", nil)
+			a.emitToast("warning", "config.json 已被删除，当前仍在用内存中的配置，可在设置中重建")
+		})
 		if err := mgr.StartWatching(); err != nil {
 			log.Printf("[config] watch failed: %v", err)
 		}
 	}
+
+	// Missing icons are filled in and orphans are removed in the background: both touch the disk
+	// and must not delay the first paint. Filling runs first so cleanup cannot drop a fresh file.
+	go func() {
+		if filled, err := a.EnsureIcons(); err != nil {
+			log.Printf("[icons] backfill failed: %v", err)
+		} else if filled > 0 {
+			log.Printf("[icons] backfilled %d icons", filled)
+		}
+		if _, err := a.CleanupIcons(); err != nil {
+			log.Printf("[icons] cleanup failed: %v", err)
+		}
+	}()
 
 	// File drops are handled by the frontend, which knows the selected group: it calls
 	// AddDroppedFiles through the bridge from window.runtime.OnFileDrop. Subscribing here as well
@@ -247,6 +275,16 @@ func (a *App) startup(ctx context.Context) {
 		OnOpenConfig: func() {
 			if err := a.OpenConfigFile(); err != nil {
 				log.Printf("[tray] open config failed: %v", err)
+			}
+		},
+		OnOpenBaseDir: func() {
+			if err := a.OpenBaseDir(); err != nil {
+				log.Printf("[tray] open base dir failed: %v", err)
+			}
+		},
+		OnOpenLog: func() {
+			if err := a.OpenLogFile(); err != nil {
+				log.Printf("[tray] open log failed: %v", err)
 			}
 		},
 		OnReload: func() {
@@ -284,6 +322,11 @@ func (a *App) domReady(_ context.Context) {
 		a.lastShown = time.Now()
 		a.stateMu.Unlock()
 		a.startBlurMonitor()
+	}
+
+	if a.previousRunCrashed {
+		a.previousRunCrashed = false
+		a.emitToast("warning", "上次没有正常退出，日志与现场见 logs 目录")
 	}
 
 	go func() {
@@ -329,9 +372,14 @@ func (a *App) shutdown(_ context.Context) {
 // Quit exits JeeDesk cleanly from the system tray.
 func (a *App) Quit() {
 	a.quitting.Store(true)
-	if ctx := a.context(); ctx != nil {
-		runtime.Quit(ctx)
+	ctx := a.context()
+	if ctx == nil {
+		// Before OnStartup there is nothing to quit through Wails; exiting the process is the only
+		// way left, and a tray "quit" that did nothing would be worse than a hard exit.
+		log.Printf("[app] quit requested before the runtime context exists; exiting")
+		os.Exit(0)
 	}
+	runtime.Quit(ctx)
 }
 
 func (a *App) setStartupNotice(msg string) {
@@ -377,6 +425,10 @@ func (a *App) onConfigUpdated(cfg config.Config) {
 	a.syncHooks(cfg.Settings, false)
 	a.ensureValidActiveGroup(cfg)
 	a.pruneUsage(cfg)
+	a.scheduleIconFill(cfg)
+	if len(cfg.Warnings) > 0 {
+		a.emitToast("warning", strings.Join(cfg.Warnings, "；"))
+	}
 	a.emitEvent("config:updated", cfg)
 }
 
@@ -393,14 +445,45 @@ func (a *App) onConfigError(err error) {
 	a.errMu.Unlock()
 }
 
+// scheduleIconFill extracts icons for items that arrived without one, such as an item hand-written
+// into config.json. It is debounced because a config update arrives in bursts while dragging.
+func (a *App) scheduleIconFill(cfg config.Config) {
+	needsFill := false
+	for _, group := range cfg.Groups {
+		for _, item := range group.Items {
+			if strings.TrimSpace(item.Icon) == "" && targetExists(item.Path) {
+				needsFill = true
+				break
+			}
+		}
+		if needsFill {
+			break
+		}
+	}
+	if !needsFill {
+		return
+	}
+
+	a.iconFillMu.Lock()
+	defer a.iconFillMu.Unlock()
+	if a.iconFillTimer != nil {
+		a.iconFillTimer.Stop()
+	}
+	a.iconFillTimer = time.AfterFunc(1200*time.Millisecond, func() {
+		if _, err := a.EnsureIcons(); err != nil {
+			log.Printf("[icons] background fill failed: %v", err)
+		}
+	})
+}
+
 // applyHotkey switches the global hotkey to spec and records what the hook holds afterwards: a
 // failed switch leaves the previous hotkey registered. explicit marks a change the user asked for.
 // Otherwise a failure that has already been reported is not reported again, which keeps a config
 // reload echoing a saved change from repeating the same message.
-func (a *App) applyHotkey(spec string, explicit bool) {
+func (a *App) applyHotkey(spec string, explicit bool) HotkeyStatus {
 	hotkeyMgr, _ := a.hooks()
 	if hotkeyMgr == nil {
-		return
+		return HotkeyStatus{Hotkey: spec, Error: "快捷键管理器尚未就绪"}
 	}
 	err := hotkeyMgr.Update(spec)
 	status := HotkeyStatus{Hotkey: spec}
@@ -422,6 +505,7 @@ func (a *App) applyHotkey(spec string, explicit bool) {
 	if err != nil && (explicit || !alreadyReported) {
 		a.emitToast("error", fmt.Sprintf("快捷键 %s 注册失败: %v", spec, err))
 	}
+	return status
 }
 
 // setHotkeyStatus replaces the reported hotkey state without touching the hook.
@@ -556,8 +640,12 @@ func (a *App) shouldHideOnBlur() bool {
 	if a.dialogOpen.Load() {
 		return false
 	}
-	cfg := a.GetConfig()
-	if !cfg.Settings.HideOnBlur {
+	mgr := a.configManager()
+	if mgr == nil {
+		return false
+	}
+	settings := mgr.Settings()
+	if !settings.HideOnBlur {
 		return false
 	}
 
@@ -574,7 +662,10 @@ func (a *App) shouldHideOnBlur() bool {
 	if a.isProcessFgFn != nil && a.isProcessFgFn() {
 		return false
 	}
-	if a.findMainHwndFn != nil && a.isCursorInWinFn != nil {
+	// Leaving the cursor on the panel used to count as "still inside", so the window survived a
+	// focus switch. Strict blur drops that exemption for users who want the launcher gone the
+	// moment another application takes over.
+	if !settings.StrictBlur && a.findMainHwndFn != nil && a.isCursorInWinFn != nil {
 		if hwnd := a.findMainHwndFn(); hwnd != 0 && a.isCursorInWinFn(hwnd) {
 			return false
 		}
@@ -584,6 +675,10 @@ func (a *App) shouldHideOnBlur() bool {
 
 // ShowWindow displays JeeDesk and brings it to the foreground.
 func (a *App) ShowWindow() {
+	// Focus stealing is only needed when the window was hidden. Showing a window that is already
+	// up (for example on a hotkey press while it has focus) would grab it three times in a row.
+	wasVisible := a.isCurrentlyVisible()
+
 	a.stateMu.Lock()
 	a.visible = true
 	a.lastShown = time.Now()
@@ -597,9 +692,11 @@ func (a *App) ShowWindow() {
 	a.startBlurMonitor()
 	a.emitEvent("window:shown", nil)
 
+	if wasVisible {
+		return
+	}
 	go func() {
-		a.focusMainWindow()
-		time.Sleep(40 * time.Millisecond)
+		time.Sleep(30 * time.Millisecond)
 		a.stateMu.Lock()
 		stillVisible := a.visible
 		a.stateMu.Unlock()
@@ -704,6 +801,7 @@ func (a *App) AddDroppedFiles(groupID string, paths []string) error {
 	}
 
 	resolvedItems := make([]config.Item, 0, len(paths))
+	failed := make([]string, 0)
 	for _, rawPath := range paths {
 		trimmed := strings.TrimSpace(rawPath)
 		if trimmed == "" {
@@ -713,6 +811,7 @@ func (a *App) AddDroppedFiles(groupID string, paths []string) error {
 		target, err := resolver.ResolvePath(trimmed)
 		if err != nil {
 			log.Printf("[resolver] resolve %q failed: %v", trimmed, err)
+			failed = append(failed, filepath.Base(trimmed))
 			continue
 		}
 
@@ -753,7 +852,9 @@ func (a *App) AddDroppedFiles(groupID string, paths []string) error {
 		}
 		idx := findGroupIndex(cfg.Groups, groupID)
 		if idx < 0 {
-			idx = 0
+			// Silently falling back to the first group put files somewhere the user never
+			// looked. Dropping onto a group that just disappeared is an error instead.
+			return fmt.Errorf("未找到分组 %q", groupID)
 		}
 		cfg.Groups[idx].Items = append(cfg.Groups[idx].Items, resolvedItems...)
 		return nil
@@ -766,6 +867,9 @@ func (a *App) AddDroppedFiles(groupID string, paths []string) error {
 		a.emitToast("success", fmt.Sprintf("已添加「%s」", resolvedItems[0].Name))
 	} else {
 		a.emitToast("success", fmt.Sprintf("已添加 %d 个项目", len(resolvedItems)))
+	}
+	if len(failed) > 0 {
+		a.emitToast("warning", fmt.Sprintf("%d 个文件无法解析: %s", len(failed), strings.Join(failed, "、")))
 	}
 	return nil
 }
@@ -839,6 +943,17 @@ func (a *App) UpdateItem(groupID string, item config.Item) error {
 	}
 	if item.Name == "" {
 		item.Name = inferItemName(item.Path)
+	}
+
+	// A cached icon belongs to the old target: keeping it would show the previous program's icon
+	// after the path was corrected.
+	previousPath := ""
+	if old, found := findItem(a.GetConfig(), groupID, item.ID); found {
+		previousPath = old.Path
+	}
+	pathChanged := previousPath != "" && !strings.EqualFold(previousPath, item.Path)
+	if pathChanged && strings.HasPrefix(item.Icon, "icons/") {
+		item.Icon = ""
 	}
 	if item.Icon == "" {
 		if rel, err := resolver.ExtractAndCacheIcon(item.Path, a.iconsDir); err == nil {
@@ -1008,10 +1123,26 @@ func (a *App) SaveSettings(settings config.Settings) error {
 	config.Normalize(&normalized)
 	settings = normalized.Settings
 
+	previous := a.GetConfig().Settings
+	// Register first, write second: a hotkey that cannot be registered must not end up in
+	// config.json, or every later start would fail to install it too. Before OnStartup there is no
+	// hook manager yet, and saving must still work.
+	if hotkeyMgr, _ := a.hooks(); hotkeyMgr != nil {
+		hookStatus := a.applyHotkey(settings.Hotkey, true)
+		if hookStatus.Error != "" {
+			// The old hotkey is still registered, so the file must keep saying so. Returning the
+			// error keeps the settings dialog open with the reason instead of saving a hotkey
+			// that does not work.
+			a.syncHooks(previous, true)
+			return fmt.Errorf("快捷键 %s 无法注册: %s", settings.Hotkey, hookStatus.Error)
+		}
+	}
+
 	if err := a.configManager().Update(func(cfg *config.Config) error {
 		cfg.Settings = settings
 		return nil
 	}); err != nil {
+		a.syncHooks(previous, true)
 		return err
 	}
 
@@ -1026,23 +1157,11 @@ func (a *App) SaveSettings(settings config.Settings) error {
 // ReloadConfig forces an immediate reload of config.json. It is also how the user retries a hotkey
 // that failed to register, for example after the program holding it was closed.
 func (a *App) ReloadConfig() error {
-	if mgr := a.configManager(); mgr == nil {
-		rebuilt, err := config.NewManager(a.configPath, a.onConfigUpdated, a.onConfigError)
-		if err != nil {
-			a.onConfigError(err)
-			return err
-		}
-		a.setConfigManager(rebuilt)
-		_ = rebuilt.StartWatching()
-		cfg := rebuilt.Get()
-		a.onConfigUpdated(cfg)
-		// The user asked for this reload, so a hotkey that still fails to register is reported.
-		a.syncHooks(cfg.Settings, true)
-		a.emitToast("success", "配置已重新加载")
-		return nil
+	mgr := a.configManager()
+	if mgr == nil {
+		return errors.New("配置管理器尚未就绪")
 	}
-
-	cfg, err := a.configManager().Reload()
+	cfg, err := mgr.Reload()
 	if err != nil {
 		return err
 	}
@@ -1063,12 +1182,13 @@ func (a *App) PickFile(title string, filterName string, pattern string) (string,
 		return "", errors.New("应用上下文未初始化")
 	}
 
+	previous := a.dialogOpen.Load()
 	a.dialogOpen.Store(true)
 	defer func() {
 		a.stateMu.Lock()
 		a.lastShown = time.Now()
 		a.stateMu.Unlock()
-		a.dialogOpen.Store(false)
+		a.dialogOpen.Store(previous)
 	}()
 
 	opts := runtime.OpenDialogOptions{
@@ -1095,12 +1215,13 @@ func (a *App) PickDirectory(title string) (string, error) {
 		return "", errors.New("应用上下文未初始化")
 	}
 
+	previous := a.dialogOpen.Load()
 	a.dialogOpen.Store(true)
 	defer func() {
 		a.stateMu.Lock()
 		a.lastShown = time.Now()
 		a.stateMu.Unlock()
-		a.dialogOpen.Store(false)
+		a.dialogOpen.Store(previous)
 	}()
 
 	return runtime.OpenDirectoryDialog(ctx, runtime.OpenDialogOptions{
@@ -1141,14 +1262,5 @@ func generateID(prefix string) string {
 }
 
 func inferItemName(path string) string {
-	cleaned := strings.TrimRight(strings.TrimSpace(path), `\/`)
-	base := filepath.Base(cleaned)
-	ext := filepath.Ext(base)
-	if ext != "" && len(ext) < len(base) {
-		return strings.TrimSuffix(base, ext)
-	}
-	if base == "" || base == "." {
-		return path
-	}
-	return base
+	return resolver.DisplayName(path)
 }

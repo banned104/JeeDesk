@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -539,5 +540,47 @@ func TestManagerBlocksWritesAfterBrokenExternalEdit(t *testing.T) {
 	}
 	if n := len(mgr.Get().Groups); n != 1 {
 		t.Fatalf("in-memory config changed while blocked: %d groups", n)
+	}
+}
+
+func TestNormalizeWarnsAboutUnknownMouseTrigger(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Settings.MouseTrigger = "side-button"
+	Normalize(&cfg)
+
+	if cfg.Settings.MouseTrigger != "none" {
+		t.Fatalf("mouse trigger = %q, want none", cfg.Settings.MouseTrigger)
+	}
+	if len(cfg.Warnings) != 1 {
+		t.Fatalf("warnings = %v, want one entry", cfg.Warnings)
+	}
+	if !strings.Contains(cfg.Warnings[0], "side-button") {
+		t.Fatalf("warning %q does not name the rejected value", cfg.Warnings[0])
+	}
+
+	// A clean config must not carry warnings, otherwise the UI would repeat an old message.
+	clean := DefaultConfig()
+	Normalize(&clean)
+	if len(clean.Warnings) != 0 {
+		t.Fatalf("clean config warnings = %v, want none", clean.Warnings)
+	}
+}
+
+func TestCollapsedGroupsNormalizedAndPersisted(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	cfg := DefaultConfig()
+	cfg.Settings.CollapsedGroups = []string{"grp-a", "grp-b"}
+	if err := Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(loaded.Settings.CollapsedGroups) != 2 || loaded.Settings.CollapsedGroups[1] != "grp-b" {
+		t.Fatalf("collapsed groups = %v, want [grp-a grp-b]", loaded.Settings.CollapsedGroups)
 	}
 }

@@ -246,3 +246,24 @@ func TestOpenFolderAndSelectAndOpenFileValidation(t *testing.T) {
 		t.Fatalf("dir = %q, want %q", dir, `C:\Users\Test`)
 	}
 }
+
+func TestIsURIOnlyAcceptsKnownSchemes(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"https://example.com", true},
+		{"HTTP://EXAMPLE.COM", true},
+		{"ms-settings:display", true},
+		{`C:\Windows\notepad.exe`, false},
+		{"C:notes.txt", false},
+		{`D:\Games\steam.exe`, false},
+		{"weird-protocol:payload", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		if got := isURI(tc.in); got != tc.want {
+			t.Errorf("isURI(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}

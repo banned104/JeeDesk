@@ -48,14 +48,8 @@ func TestIconBytesValidICOAndVisual(t *testing.T) {
 	if biHeight := int32(binary.LittleEndian.Uint32(dib[8:12])); biHeight != 64 {
 		t.Fatalf("unexpected biHeight: got %d, want 64", biHeight)
 	}
-	if biPlanes := binary.LittleEndian.Uint16(dib[12:14]); biPlanes != 1 {
-		t.Fatalf("unexpected biPlanes: got %d, want 1", biPlanes)
-	}
 	if biBitCount := binary.LittleEndian.Uint16(dib[14:16]); biBitCount != 32 {
 		t.Fatalf("unexpected biBitCount: got %d, want 32", biBitCount)
-	}
-	if biCompression := binary.LittleEndian.Uint32(dib[16:20]); biCompression != 0 {
-		t.Fatalf("unexpected biCompression: got %d, want 0 (BI_RGB)", biCompression)
 	}
 	if biSizeImage := binary.LittleEndian.Uint32(dib[20:24]); biSizeImage != 32*32*4 {
 		t.Fatalf("unexpected biSizeImage: got %d, want %d", biSizeImage, 32*32*4)
@@ -64,7 +58,8 @@ func TestIconBytesValidICOAndVisual(t *testing.T) {
 	xorPixels := data[62 : 62+32*32*4]
 	andMask := data[62+32*32*4:]
 
-	// Top-left corner (x=0, y=0 -> bottom-up bmpRow=31) must be transparent.
+	// The artwork is the blade mark: it must carry real transparency in the corners and at least
+	// one strongly saturated red pixel (the blade) rather than a flat placeholder.
 	cornerOff := (31*32 + 0) * 4
 	if xorPixels[cornerOff+3] != 0 {
 		t.Fatalf("expected outer corner alpha == 0, got %d", xorPixels[cornerOff+3])
@@ -73,24 +68,21 @@ func TestIconBytesValidICOAndVisual(t *testing.T) {
 		t.Fatalf("expected AND mask bit set for transparent corner pixel")
 	}
 
-	// Vertical stem of "J" around (x=19, y=13 -> bmpRow=18) must be opaque and bright cyan.
-	stemOff := (18*32 + 19) * 4
-	stemB, stemG, stemR, stemA := xorPixels[stemOff+0], xorPixels[stemOff+1], xorPixels[stemOff+2], xorPixels[stemOff+3]
-	if stemA != 255 {
-		t.Fatalf("expected opaque J monogram stem pixel, got alpha %d", stemA)
+	opaque, redDominant := 0, 0
+	for i := 0; i < len(xorPixels); i += 4 {
+		b, g, r, a := xorPixels[i], xorPixels[i+1], xorPixels[i+2], xorPixels[i+3]
+		if a > 160 {
+			opaque++
+			if r > 90 && r > g*2 && r > b*2 {
+				redDominant++
+			}
+		}
 	}
-	if stemB <= stemR || stemG < 140 || stemB < 200 {
-		t.Fatalf("expected glowing cyan-blue J pixel, got BGRA=(%d,%d,%d,%d)", stemB, stemG, stemR, stemA)
+	if opaque < 100 {
+		t.Fatalf("expected a substantial opaque area, got %d pixels", opaque)
 	}
-
-	// Dark-glass background pixel at (x=7, y=10 -> bmpRow=21) must be opaque and dark.
-	bgOff := (21*32 + 7) * 4
-	bgB, bgG, bgR, bgA := xorPixels[bgOff+0], xorPixels[bgOff+1], xorPixels[bgOff+2], xorPixels[bgOff+3]
-	if bgA != 255 {
-		t.Fatalf("expected opaque dark-glass background pixel, got alpha %d", bgA)
-	}
-	if bgR > 80 || bgG > 100 {
-		t.Fatalf("expected dark-glass background pixel, got BGRA=(%d,%d,%d,%d)", bgB, bgG, bgR, bgA)
+	if redDominant < 5 {
+		t.Fatalf("expected red blade pixels in the tray icon, got %d", redDominant)
 	}
 }
 

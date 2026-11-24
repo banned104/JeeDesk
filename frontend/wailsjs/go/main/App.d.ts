@@ -5,7 +5,7 @@ import {main} from '../models';
 
 export function AddDroppedFiles(arg1:string,arg2:Array<string>):Promise<void>;
 
-export function AddGroup(arg1:string):Promise<void>;
+export function AddGroup(arg1:string):Promise<string>;
 
 export function AddItem(arg1:string,arg2:config.Item):Promise<void>;
 

@@ -50,7 +50,8 @@ func newTestApp(t *testing.T) (*App, *atomic.Int32) {
 func TestAppGroupAndItemLifecycle(t *testing.T) {
 	app, _ := newTestApp(t)
 
-	if err := app.AddGroup("开发工具"); err != nil {
+	devGroupID, err := app.AddGroup("开发工具")
+	if err != nil {
 		t.Fatalf("AddGroup failed: %v", err)
 	}
 
@@ -59,6 +60,11 @@ func TestAppGroupAndItemLifecycle(t *testing.T) {
 		t.Fatalf("expected 2 groups, got %d", len(cfg.Groups))
 	}
 	devGroup := cfg.Groups[1]
+	// The returned ID is the new group, which also becomes the target for file drops.
+	if devGroup.ID != devGroupID || app.getActiveGroupID() != devGroupID {
+		t.Fatalf("expected the new group to be returned and active, got id %q, returned %q, active %q",
+			devGroup.ID, devGroupID, app.getActiveGroupID())
+	}
 	if devGroup.Name != "开发工具" {
 		t.Fatalf("expected group name 开发工具, got %q", devGroup.Name)
 	}
@@ -155,7 +161,7 @@ func TestAppBrokenConfigResilienceAndHotReload(t *testing.T) {
 		t.Fatalf("StartWatching failed: %v", err)
 	}
 
-	if err := app.AddGroup("KeepMe"); err != nil {
+	if _, err := app.AddGroup("KeepMe"); err != nil {
 		t.Fatalf("AddGroup failed: %v", err)
 	}
 
@@ -520,7 +526,7 @@ func TestAppWritesRefusedWhileConfigBroken(t *testing.T) {
 	}
 
 	// A change made through the app must be refused and leave the user's file as it is.
-	err := app.AddGroup("不会写入")
+	_, err := app.AddGroup("不会写入")
 	if !errors.Is(err, config.ErrWriteBlocked) {
 		t.Fatalf("expected ErrWriteBlocked, got %v", err)
 	}
@@ -539,7 +545,7 @@ func TestAppWritesRefusedWhileConfigBroken(t *testing.T) {
 	if _, err := app.cfgMgr.Reload(); err != nil {
 		t.Fatalf("reload repaired config: %v", err)
 	}
-	if err := app.AddGroup("修复后写入"); err != nil {
+	if _, err := app.AddGroup("修复后写入"); err != nil {
 		t.Fatalf("AddGroup after repair failed: %v", err)
 	}
 	onDisk, err := config.Load(app.configPath)
@@ -768,7 +774,7 @@ func TestLoadConfigKeepsManagerUsableWhenConfigBroken(t *testing.T) {
 	}
 
 	// The manager startup relies on is the one that refuses to write over the broken file.
-	if err := app.AddGroup("不会写入"); !errors.Is(err, config.ErrWriteBlocked) {
+	if _, err := app.AddGroup("不会写入"); !errors.Is(err, config.ErrWriteBlocked) {
 		t.Fatalf("expected ErrWriteBlocked, got %v", err)
 	}
 	got, err := os.ReadFile(app.configPath)

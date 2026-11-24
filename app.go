@@ -816,14 +816,14 @@ func (a *App) OpenItemLocation(path string) error {
 	return launcher.OpenFolderAndSelect(path)
 }
 
-// AddGroup appends a new group to config.json.
-func (a *App) AddGroup(name string) error {
+// AddGroup appends a new group to config.json, makes it the active group, and returns its ID.
+func (a *App) AddGroup(name string) (string, error) {
 	if a.cfgMgr == nil {
-		return errors.New("配置管理器尚未就绪")
+		return "", errors.New("配置管理器尚未就绪")
 	}
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
-		return errors.New("分组名称不能为空")
+		return "", errors.New("分组名称不能为空")
 	}
 
 	newGroup := config.Group{
@@ -831,14 +831,14 @@ func (a *App) AddGroup(name string) error {
 		Name:  trimmed,
 		Items: []config.Item{},
 	}
-	err := a.cfgMgr.Update(func(cfg *config.Config) error {
+	if err := a.cfgMgr.Update(func(cfg *config.Config) error {
 		cfg.Groups = append(cfg.Groups, newGroup)
 		return nil
-	})
-	if err == nil {
-		a.SetActiveGroup(newGroup.ID)
+	}); err != nil {
+		return "", err
 	}
-	return err
+	a.SetActiveGroup(newGroup.ID)
+	return newGroup.ID, nil
 }
 
 // RenameGroup renames an existing group.

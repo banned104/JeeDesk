@@ -258,7 +258,9 @@ function openAddGroupModal() {
 async function handleGroupModalSubmit(name: string) {
   try {
     if (groupModal.mode === 'add') {
-      await bridge.addGroup(name);
+      // The backend has already made the new group active. Select it here too, so that the config
+      // update arriving next keeps that choice instead of sending the previous group back.
+      selectGroup(await bridge.addGroup(name));
     } else if (groupModal.groupId) {
       await bridge.renameGroup(groupModal.groupId, name);
     }

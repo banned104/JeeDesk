@@ -8,7 +8,7 @@ interface WailsGoApp {
   UpdateItem(groupID: string, item: Item): Promise<void>;
   DeleteItem(groupID: string, itemID: string): Promise<void>;
   OpenItemLocation(path: string): Promise<void>;
-  AddGroup(name: string): Promise<void>;
+  AddGroup(name: string): Promise<string>;
   RenameGroup(groupID: string, name: string): Promise<void>;
   DeleteGroup(groupID: string): Promise<void>;
   SaveSettings(settings: Settings): Promise<void>;
@@ -204,15 +204,15 @@ export const bridge = {
     } satisfies ToastPayload);
   },
 
-  async addGroup(name: string): Promise<void> {
+  async addGroup(name: string): Promise<string> {
     const app = getApp();
     if (app) {
-      await app.AddGroup(name);
-      return;
+      return await app.AddGroup(name);
     }
     const newGroup: Group = { id: createId('grp'), name, items: [] };
     mockConfig.groups.push(newGroup);
     emitMockEvent('config:updated', cloneConfig(mockConfig));
+    return newGroup.id;
   },
 
   async renameGroup(groupID: string, name: string): Promise<void> {

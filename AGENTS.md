@@ -80,6 +80,9 @@
   `config.json` 结构时，必须同步 `frontend/src/api/bridge.ts` 与 `frontend/src/types/config.ts`。
   类型检查发现不了这类不一致，需要实际运行验证。`App` 的导出方法签名变化后，用
   `wails generate module` 重新生成 `frontend/wailsjs`，与 `bridge.ts` 一起提交。
+- **应用图标与托盘图标是两套来源**：`build/appicon.png` 与 `build/windows/icon.ico` 是应用图标
+  （源图与 1024 版本在 `assets/`，用 `assets/appicon.png` 重新生成 ico）；`build/genicon.go`
+  会用 `internal/tray` 的内置托盘图标覆盖 `build/windows/icon.ico`，换过应用图标后不要直接运行它。
 - **测试的环境影响**：`go test ./...` 会短暂注册全局快捷键 `Ctrl+Alt+Shift+F19`~`F24`、
   安装低级鼠标钩子、创建消息窗口，并调用 PowerShell 生成 `.lnk` 夹具、从 `notepad.exe`
   提取图标，需要 Windows 桌面会话。

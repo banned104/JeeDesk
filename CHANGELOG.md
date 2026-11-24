@@ -85,8 +85,14 @@
 
 - 根目录 `README.md` 与 `docs/geekdesk-migration.md`（GeekDesk 迁移过程与字段映射的完整记录）。
 - 根目录 `AGENTS.md` 作为项目约定入口。
+- 应用图标换成红宝石 M9 多普勒，替换掉 Wails 模板的 `W`：`build/appicon.png` 与
+  `build/windows/icon.ico`（16/24/32/48/64/128/256 七档）；1024 图与原始素材放 `assets/`。
+- `README.md` 改写为概览式项目介绍：徽章、特性表、使用步骤、构建与验证、目录结构与已知限制，
+  配置、图标机制与 GeekDesk 迁移说明保留，并补致谢。
 
 #### 变更
 
 - `.agents/`、`_scratch/` 与 `wails build` 生成的 `frontend/package.json.md5`
   不纳入版本管理。
+- 图标有两个来源：应用图标以 `build/appicon.png`（源在 `assets/`）为准；`go run build/genicon.go`
+  仍会用 `internal/tray` 的内置托盘图标覆盖 `build/windows/icon.ico`。

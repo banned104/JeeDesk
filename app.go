@@ -84,9 +84,14 @@ type App struct {
 	lastShown time.Time
 	// previousRunCrashed is set by main when the marker from the last run was still on disk.
 	previousRunCrashed bool
-	dialogOpen         atomic.Bool
-	quitting           atomic.Bool
-	domReadyOK         atomic.Bool
+	// nativeDialogOpen covers Win32 pickers, uiModalOpen covers frontend dialogs. They are kept
+	// apart because closing a picker must not clear a modal that is still on screen.
+	nativeDialogOpen atomic.Bool
+	uiModalOpen      atomic.Bool
+	// pendingShow remembers a wake request that arrived before the Wails context existed.
+	pendingShow atomic.Bool
+	quitting    atomic.Bool
+	domReadyOK  atomic.Bool
 
 	blurMu     sync.Mutex
 	blurStopCh chan struct{}
@@ -235,6 +240,10 @@ func (a *App) startup(ctx context.Context) {
 		a.hookMu.Unlock()
 	}
 
+	if a.pendingShow.Swap(false) {
+		a.ShowWindow()
+	}
+
 	// Start watching only now: the watcher may deliver settings that need both hook managers.
 	if mgr := a.configManager(); mgr != nil {
 		// Losing config.json is not an edit the UI can render; it needs a banner so deleting the
@@ -351,6 +360,13 @@ func (a *App) beforeClose(_ context.Context) (prevent bool) {
 
 func (a *App) shutdown(_ context.Context) {
 	a.stopBlurMonitor()
+
+	a.iconFillMu.Lock()
+	if a.iconFillTimer != nil {
+		a.iconFillTimer.Stop()
+		a.iconFillTimer = nil
+	}
+	a.iconFillMu.Unlock()
 
 	hotkeyMgr, mouseMgr := a.hooks()
 	if hotkeyMgr != nil {
@@ -637,7 +653,7 @@ func (a *App) stopBlurMonitor() {
 }
 
 func (a *App) shouldHideOnBlur() bool {
-	if a.dialogOpen.Load() {
+	if a.modalOpen() {
 		return false
 	}
 	mgr := a.configManager()
@@ -673,6 +689,11 @@ func (a *App) shouldHideOnBlur() bool {
 	return true
 }
 
+// modalOpen reports whether a dialog of any kind is on screen.
+func (a *App) modalOpen() bool {
+	return a.nativeDialogOpen.Load() || a.uiModalOpen.Load()
+}
+
 // ShowWindow displays JeeDesk and brings it to the foreground.
 func (a *App) ShowWindow() {
 	// Focus stealing is only needed when the window was hidden. Showing a window that is already
@@ -686,6 +707,9 @@ func (a *App) ShowWindow() {
 
 	ctx := a.context()
 	if ctx == nil {
+		// A second-instance wake can arrive before OnStartup installed the context; remember the
+		// request so startup can honour it instead of dropping it.
+		a.pendingShow.Store(true)
 		return
 	}
 	runtime.WindowShow(ctx)
@@ -773,9 +797,11 @@ func (a *App) LaunchItem(groupID string, itemID string) error {
 	if !found {
 		return fmt.Errorf("未找到目标项目 (%s/%s)", groupID, itemID)
 	}
-	launchErr := launcher.Launch(item.Path, item.Args, item.WorkDir)
+	var launchErr error
 	if item.Admin {
 		launchErr = launcher.LaunchElevated(item.Path, item.Args, item.WorkDir)
+	} else {
+		launchErr = launcher.Launch(item.Path, item.Args, item.WorkDir)
 	}
 	if launchErr != nil {
 		// A cancelled UAC prompt is not a failure worth a toast, but it must not count as a
@@ -1138,6 +1164,13 @@ func (a *App) SaveSettings(settings config.Settings) error {
 		}
 	}
 
+	// Window geometry is owned by SaveWindowState, which writes quietly and never reaches the
+	// frontend. A settings save carrying the geometry from startup would move the panel back.
+	geometry := previous
+	settings.WindowX, settings.WindowY = geometry.WindowX, geometry.WindowY
+	settings.WindowWidth, settings.WindowHeight = geometry.WindowWidth, geometry.WindowHeight
+	settings.WindowPositioned = geometry.WindowPositioned
+
 	if err := a.configManager().Update(func(cfg *config.Config) error {
 		cfg.Settings = settings
 		return nil
@@ -1161,7 +1194,8 @@ func (a *App) ReloadConfig() error {
 	if mgr == nil {
 		return errors.New("配置管理器尚未就绪")
 	}
-	cfg, err := mgr.Reload()
+	// Force: the user asked for this reload, even if the file did not change on disk.
+	cfg, err := mgr.ReloadForce()
 	if err != nil {
 		return err
 	}
@@ -1182,13 +1216,12 @@ func (a *App) PickFile(title string, filterName string, pattern string) (string,
 		return "", errors.New("应用上下文未初始化")
 	}
 
-	previous := a.dialogOpen.Load()
-	a.dialogOpen.Store(true)
+	a.nativeDialogOpen.Store(true)
 	defer func() {
 		a.stateMu.Lock()
 		a.lastShown = time.Now()
 		a.stateMu.Unlock()
-		a.dialogOpen.Store(previous)
+		a.nativeDialogOpen.Store(false)
 	}()
 
 	opts := runtime.OpenDialogOptions{
@@ -1215,13 +1248,12 @@ func (a *App) PickDirectory(title string) (string, error) {
 		return "", errors.New("应用上下文未初始化")
 	}
 
-	previous := a.dialogOpen.Load()
-	a.dialogOpen.Store(true)
+	a.nativeDialogOpen.Store(true)
 	defer func() {
 		a.stateMu.Lock()
 		a.lastShown = time.Now()
 		a.stateMu.Unlock()
-		a.dialogOpen.Store(previous)
+		a.nativeDialogOpen.Store(false)
 	}()
 
 	return runtime.OpenDirectoryDialog(ctx, runtime.OpenDialogOptions{

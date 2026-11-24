@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"fmt"
 	"log"
 	"mime"
 	"net/http"
@@ -28,31 +29,19 @@ const (
 )
 
 func main() {
-	baseDir := resolveBaseDir()
-
-	// A GUI build has no console, so the log file is the only trace of a failed startup. It is
-	// opened before anything else can fail.
-	if path, closeLog, err := applog.Setup(baseDir); err != nil {
-		log.Printf("[app] cannot open log file: %v", err)
-	} else {
-		defer closeLog()
-		log.Printf("[app] JeeDesk %s starting, base dir %s, log %s", appVersion, baseDir, path)
-	}
-
-	// A marker left behind by the previous run means it never shut down cleanly. Only the primary
-	// instance owns it: a second launch that wakes the running copy must not clear it.
-	startedAfterCrash := applog.PreviousRunCrashed(baseDir)
+	baseDir, dataDirNotice := resolveBaseDirWithFallback()
 
 	app := NewApp(baseDir)
-	app.previousRunCrashed = startedAfterCrash
-	// Load the config before anything can run concurrently with OnStartup.
-	app.loadConfig()
 
-	// The window is created once, so the saved size, theme, and start-hidden preference have to
-	// be read here rather than applied later from the frontend.
-	bootCfg := app.GetConfig()
-	width, height, startHidden, theme := bootWindowOptions(bootCfg.Settings)
+	// A pre-upgrade build uses the old fixed mutex name; wake it rather than running a second copy
+	// that would write the same config.json.
+	if legacyInstanceRunning() {
+		return
+	}
 
+	// The single-instance mutex is taken before the config is opened: LoadOrCreate writes a
+	// default config.json when the file is missing, and a second launch doing that while the
+	// primary runs would replace the user's groups with defaults.
 	mutexName, className, windowName := SingleInstanceNames(baseDir)
 	si, isPrimary, err := AcquireSingleInstance(mutexName, className, windowName, app.ShowWindow)
 	if err != nil {
@@ -63,8 +52,32 @@ func main() {
 	if si != nil {
 		defer si.Close()
 	}
+
+	// A GUI build has no console, so the log file is the only trace of a failed startup. It is
+	// opened after the primary check so a second launch cannot rotate the log the primary owns.
+	if path, closeLog, logErr := applog.Setup(baseDir); logErr != nil {
+		log.Printf("[app] cannot open log file: %v", logErr)
+	} else {
+		defer closeLog()
+		log.Printf("[app] JeeDesk %s starting, base dir %s, log %s", appVersion, baseDir, path)
+	}
+
+	// A marker left behind by the previous run means it never shut down cleanly. Only the primary
+	// instance owns it: a second launch that wakes the running copy must not clear it.
+	app.previousRunCrashed = applog.PreviousRunCrashed(baseDir)
+	app.startupNotice = dataDirNotice
+	// Load the config before anything can run concurrently with OnStartup.
+	app.loadConfig()
 	_ = applog.WriteMarker(baseDir)
 	defer applog.ClearMarker(baseDir)
+
+	// The window is created once, so the saved size, theme, and start-hidden preference have to
+	// be read here rather than applied later from the frontend.
+	bootCfg := app.GetConfig()
+	width, height, startHidden, theme := bootWindowOptions(bootCfg.Settings)
+	if silentLaunch() {
+		startHidden = true
+	}
 
 	err = wails.Run(&options.App{
 		Title:            "JeeDesk",
@@ -94,6 +107,8 @@ func main() {
 			app,
 		},
 		Windows: &windows.Options{
+			// Keep WebView2's profile next to config.json so a portable folder copies as one unit.
+			WebviewUserDataPath:  filepath.Join(baseDir, "webview"),
 			WebviewIsTransparent: true,
 			WindowIsTranslucent:  true,
 			BackdropType:         windows.Acrylic,
@@ -130,6 +145,50 @@ func bootWindowOptions(settings config.Settings) (width, height int, startHidden
 	}
 
 	return width, height, settings.StartHidden, theme
+}
+
+// silentLaunch reports whether the executable was started with --silent, which the autostart entry
+// and a shortcut can use to start without showing the panel.
+func silentLaunch() bool {
+	for _, arg := range os.Args[1:] {
+		if strings.EqualFold(strings.TrimSpace(arg), "--silent") {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveBaseDirWithFallback returns a writable data directory. A read-only location (a USB stick
+// with the write-protect switch on, a Program Files install without rights) falls back to
+// %LOCALAPPDATA%\JeeDesk and reports why, instead of failing on every save.
+func resolveBaseDirWithFallback() (string, string) {
+	baseDir := resolveBaseDir()
+	if isWritableDir(baseDir) {
+		return baseDir, ""
+	}
+	fallback := filepath.Join(os.Getenv("LOCALAPPDATA"), "JeeDesk")
+	if isWritableDir(fallback) {
+		return fallback, fmt.Sprintf("数据目录 %s 不可写，已改用 %s", baseDir, fallback)
+	}
+	return baseDir, ""
+}
+
+// isWritableDir probes a directory by creating and removing a temporary file.
+func isWritableDir(dir string) bool {
+	if strings.TrimSpace(dir) == "" {
+		return false
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return false
+	}
+	probe, err := os.CreateTemp(dir, ".write-probe-*")
+	if err != nil {
+		return false
+	}
+	name := probe.Name()
+	_ = probe.Close()
+	_ = os.Remove(name)
+	return true
 }
 
 // resolveBaseDir picks the directory that holds config.json and icons/.

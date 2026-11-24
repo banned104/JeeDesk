@@ -117,6 +117,39 @@ func SingleInstanceNames(baseDir string) (mutexName, className, windowName strin
 		fmt.Sprintf("%s-IPC-Window-%s", singleInstancePrefix, suffix)
 }
 
+// Legacy names used before single-instance naming was derived from the data directory. A build
+// from before that change is still holding them; seeing one means an old instance is running and
+// must be woken instead of starting a second copy that writes the same config.json.
+const (
+	legacyMutexName  = `Local\JeeDesk-SingleInstance-Mutex-v1`
+	legacyClassName  = "JeeDesk-SingleInstance-IPC-Class"
+	legacyWindowName = "JeeDesk-SingleInstance-IPC-Window"
+)
+
+// legacyInstanceRunning reports whether an old build owns the legacy mutex and wakes it.
+func legacyInstanceRunning() bool {
+	mutexPtr, err := windows.UTF16PtrFromString(legacyMutexName)
+	if err != nil {
+		return false
+	}
+	handle, err := windows.CreateMutex(nil, false, mutexPtr)
+	if errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
+		if handle != 0 {
+			_ = windows.CloseHandle(handle)
+		}
+		classPtr, classErr := windows.UTF16PtrFromString(legacyClassName)
+		windowPtr, windowErr := windows.UTF16PtrFromString(legacyWindowName)
+		if classErr == nil && windowErr == nil {
+			wakeExistingInstance(classPtr, windowPtr)
+		}
+		return true
+	}
+	if handle != 0 {
+		_ = windows.CloseHandle(handle)
+	}
+	return false
+}
+
 // AcquireSingleInstance acquires the named Win32 single-instance mutex.
 // If an existing primary instance already holds the mutex, it locates the
 // primary's HWND_MESSAGE IPC window, grants foreground permission, posts

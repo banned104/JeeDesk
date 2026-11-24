@@ -253,25 +253,31 @@ func expandEnvVars(s string) string {
 	return windows.UTF16ToString(buf[:n])
 }
 
-// uriSchemes are the protocols ShellExecute is expected to hand to a registered handler. Anything
-// else that merely contains a colon is treated as a path, which keeps a stray "C:notes.txt" from
-// being launched as a protocol.
-var uriSchemes = map[string]bool{
-	"http": true, "https": true, "file": true, "ftp": true, "mailto": true, "tel": true,
-	"ms-settings": true, "ms-windows-store": true, "ms-gamebar": true, "steam": true,
-	"discord": true, "spotify": true,
-}
-
+// isURI reports whether s is a protocol URL rather than a file path. Windows has thousands of
+// registered schemes (obsidian:, vscode:, steam:, ms-settings: …), so the check accepts any
+// well-formed scheme instead of a list that would keep breaking installed applications. A drive
+// letter is excluded by VolumeName and by requiring at least two scheme characters.
 func isURI(s string) bool {
-	if idx := strings.Index(s, "://"); idx > 0 {
-		return uriSchemes[strings.ToLower(s[:idx])]
-	}
-	colonIdx := strings.IndexByte(s, ':')
-	// Require at least 2 scheme characters so Windows drive letters (e.g. C:\) are not treated as URIs.
-	if colonIdx <= 1 {
+	if filepath.VolumeName(s) != "" {
 		return false
 	}
-	return uriSchemes[strings.ToLower(s[:colonIdx])]
+	colonIdx := strings.IndexByte(s, ':')
+	if colonIdx < 2 {
+		return false
+	}
+	scheme := s[:colonIdx]
+	for i := 0; i < len(scheme); i++ {
+		c := scheme[i]
+		isAlpha := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+		isDigit := c >= '0' && c <= '9'
+		if i == 0 && !isAlpha {
+			return false
+		}
+		if !isAlpha && !isDigit && c != '+' && c != '-' && c != '.' {
+			return false
+		}
+	}
+	return true
 }
 
 func findPowerShell() string {

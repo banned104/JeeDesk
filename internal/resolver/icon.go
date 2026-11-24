@@ -115,11 +115,17 @@ func ExtractAndCacheIcon(targetPath string, iconsDir string) (string, error) {
 	}
 
 	// The cache key is the target path, so an existing PNG is the icon for this target. Hitting
-	// it avoids re-extracting the same icon on every panel refresh.
+	// it avoids re-extracting the same icon on every panel refresh. An updated target (a portable
+	// exe swapped in place, an app updated to a new icon) is re-extracted: the cached file older
+	// than the target means the artwork may have changed.
 	filename := IconHash(cleanedTarget) + ".png"
 	outPath := filepath.Join(iconsDir, filename)
 	if info, statErr := os.Stat(outPath); statErr == nil && info.Mode().IsRegular() && info.Size() > 0 {
-		return "icons/" + filename, nil
+		targetInfo, targetErr := os.Stat(cleanedTarget)
+		stale := targetErr == nil && !targetInfo.IsDir() && targetInfo.ModTime().After(info.ModTime())
+		if !stale {
+			return "icons/" + filename, nil
+		}
 	}
 
 	hIcon, err := extractWin32Icon(cleanedTarget)

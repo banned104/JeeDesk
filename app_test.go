@@ -342,10 +342,33 @@ func TestShouldHideOnBlur(t *testing.T) {
 	})
 
 	t.Run("dialog_open_does_not_hide", func(t *testing.T) {
+		for _, open := range []func(){
+			func() {
+				app := newBlurTestApp(t)
+				app.SetModalOpen(true)
+				if app.shouldHideOnBlur() {
+					t.Fatal("expected false while a UI modal is open")
+				}
+			},
+			func() {
+				app := newBlurTestApp(t)
+				app.nativeDialogOpen.Store(true)
+				if app.shouldHideOnBlur() {
+					t.Fatal("expected false while a native dialog is open")
+				}
+			},
+		} {
+			open()
+		}
+	})
+
+	t.Run("closing_a_native_dialog_keeps_the_ui_modal", func(t *testing.T) {
 		app := newBlurTestApp(t)
-		app.dialogOpen.Store(true)
-		if app.shouldHideOnBlur() {
-			t.Fatal("expected shouldHideOnBlur() to return false when dialogOpen is true")
+		app.SetModalOpen(true)
+		app.nativeDialogOpen.Store(true)
+		app.nativeDialogOpen.Store(false)
+		if !app.modalOpen() {
+			t.Fatal("closing a picker must not clear the open UI modal")
 		}
 	})
 

@@ -27,16 +27,11 @@ var (
 	procGetForegroundWindow   = modUser32.NewProc("GetForegroundWindow")
 	procGetWindowThreadProcID = modUser32.NewProc("GetWindowThreadProcessId")
 	procAttachThreadInput     = modUser32.NewProc("AttachThreadInput")
-	procMessageBoxW           = modUser32.NewProc("MessageBoxW")
 	procIsWindow              = modUser32.NewProc("IsWindow")
 	procMonitorFromPoint      = modUser32.NewProc("MonitorFromPoint")
 )
 
 const (
-	mbOK          = 0x00000000
-	mbIconWarning = 0x00000030
-	mbTopMost     = 0x00040000
-
 	swShow    = 5
 	swRestore = 9
 
@@ -220,24 +215,6 @@ func roundWindowCorners(hwnd uintptr) {
 		dwmwaWindowCornerPreference,
 		uintptr(unsafe.Pointer(&preference)),
 		unsafe.Sizeof(preference),
-	)
-}
-
-// showWarningMessageBox displays a non-crashing top-most warning dialog on Windows.
-func showWarningMessageBox(title, message string) {
-	titlePtr, err := windows.UTF16PtrFromString(title)
-	if err != nil {
-		return
-	}
-	msgPtr, err := windows.UTF16PtrFromString(message)
-	if err != nil {
-		return
-	}
-	procMessageBoxW.Call(
-		0,
-		uintptr(unsafe.Pointer(msgPtr)),
-		uintptr(unsafe.Pointer(titlePtr)),
-		uintptr(mbOK|mbIconWarning|mbTopMost),
 	)
 }
 

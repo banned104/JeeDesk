@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -16,6 +17,8 @@ import (
 	"jeedesk/internal/config"
 	"jeedesk/internal/launcher"
 	"jeedesk/internal/resolver"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 const (
@@ -43,7 +46,23 @@ type UpdateInfo struct {
 // must not hide the window: a native file picker or a click on another window would otherwise
 // close the dialog and drop the form.
 func (a *App) SetModalOpen(open bool) {
-	a.dialogOpen.Store(open)
+	a.uiModalOpen.Store(open)
+}
+
+// OpenURL hands an http(s) link to the default browser. window.open inside the WebView would open
+// another frameless WebView window instead of the system browser.
+func (a *App) OpenURL(rawURL string) error {
+	trimmed := strings.TrimSpace(rawURL)
+	lower := strings.ToLower(trimmed)
+	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+		return errors.New("只允许打开 http/https 链接")
+	}
+	ctx := a.context()
+	if ctx == nil {
+		return errors.New("应用上下文未初始化")
+	}
+	runtime.BrowserOpenURL(ctx, trimmed)
+	return nil
 }
 
 // GetMissingTargets returns the IDs of items whose target no longer exists, so the grid can mark
@@ -151,6 +170,11 @@ func (a *App) EnsureIcons() (int, error) {
 // were removed. Icons younger than orphanIconAge are kept, because they may belong to an item that
 // is still being added.
 func (a *App) CleanupIcons() (int, error) {
+	// With a broken config.json the in-memory configuration is the default one, which references
+	// no icons at all: cleaning then would delete every cached file. Refuse until the file loads.
+	if a.configLoadErr != nil {
+		return 0, nil
+	}
 	entries, err := os.ReadDir(a.iconsDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -159,8 +183,13 @@ func (a *App) CleanupIcons() (int, error) {
 		return 0, err
 	}
 
+	cfg := a.GetConfig()
+	if len(cfg.Groups) == 0 {
+		return 0, nil
+	}
+
 	referenced := make(map[string]bool)
-	for _, group := range a.GetConfig().Groups {
+	for _, group := range cfg.Groups {
 		for _, item := range group.Items {
 			if name := iconBaseName(item.Icon); name != "" {
 				referenced[name] = true
@@ -273,7 +302,7 @@ func (a *App) CheckUpdates() UpdateInfo {
 		HTMLURL string `json:"html_url"`
 		Body    string `json:"body"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&payload); err != nil {
 		info.Error = fmt.Sprintf("更新信息无法解析: %v", err)
 		return info
 	}

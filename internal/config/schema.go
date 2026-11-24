@@ -78,12 +78,15 @@ type Settings struct {
 	// WindowOpacity is a percentage, WindowWidth and WindowHeight are device independent
 	// pixels with 0 meaning the default size. WindowX and WindowY are the last window
 	// position, with 0,0 meaning "let the application choose".
-	WindowOpacity int `json:"window_opacity"`
-	WindowWidth   int `json:"window_width"`
-	WindowHeight  int `json:"window_height"`
-	WindowX       int `json:"window_x"`
-	WindowY       int `json:"window_y"`
-	FontScale     int `json:"font_scale"`
+	// WindowPositioned marks a saved position as real: monitors left of or above the primary one
+	// have negative coordinates, so 0,0 cannot mean "unset" on its own.
+	WindowPositioned bool `json:"window_positioned"`
+	WindowOpacity    int  `json:"window_opacity"`
+	WindowWidth      int  `json:"window_width"`
+	WindowHeight     int  `json:"window_height"`
+	WindowX          int  `json:"window_x"`
+	WindowY          int  `json:"window_y"`
+	FontScale        int  `json:"font_scale"`
 }
 
 // Group represents a named category of launcher items.
@@ -209,12 +212,6 @@ func Normalize(cfg *Config) {
 	if cfg.Settings.WindowHeight <= 0 {
 		cfg.Settings.WindowHeight = 0
 	}
-	if cfg.Settings.WindowX < 0 {
-		cfg.Settings.WindowX = 0
-	}
-	if cfg.Settings.WindowY < 0 {
-		cfg.Settings.WindowY = 0
-	}
 
 	if cfg.Settings.CollapsedGroups == nil {
 		cfg.Settings.CollapsedGroups = []string{}
@@ -323,9 +320,16 @@ func BackupPath(path string) string {
 	return path + ".bak"
 }
 
-// Save normalizes a copy of cfg and writes it atomically to path. The previous contents are kept
-// as path + ".bak" so a damaged file can be recovered by hand.
+// Save normalizes a copy of cfg and writes it atomically to path, keeping the previous contents as
+// path + ".bak" so a damaged file can be recovered by hand.
 func Save(path string, cfg Config) error {
+	return SaveWithBackup(path, cfg, true)
+}
+
+// SaveWithBackup writes cfg like Save, but only rotates the backup when backup is true. Callers
+// that persist high-frequency, non-structural changes (window geometry) keep the last real version
+// instead of overwriting it with a copy of itself.
+func SaveWithBackup(path string, cfg Config, backup bool) error {
 	next := Clone(cfg)
 	Normalize(&next)
 
@@ -340,7 +344,9 @@ func Save(path string, cfg Config) error {
 		return fmt.Errorf("create config directory %q: %w", dir, err)
 	}
 
-	backupExisting(path)
+	if backup {
+		backupExisting(path)
+	}
 
 	tmp, err := os.CreateTemp(dir, ".config-*.tmp")
 	if err != nil {

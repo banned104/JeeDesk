@@ -247,7 +247,7 @@ func TestOpenFolderAndSelectAndOpenFileValidation(t *testing.T) {
 	}
 }
 
-func TestIsURIOnlyAcceptsKnownSchemes(t *testing.T) {
+func TestIsURI(t *testing.T) {
 	cases := []struct {
 		in   string
 		want bool
@@ -258,7 +258,10 @@ func TestIsURIOnlyAcceptsKnownSchemes(t *testing.T) {
 		{`C:\Windows\notepad.exe`, false},
 		{"C:notes.txt", false},
 		{`D:\Games\steam.exe`, false},
-		{"weird-protocol:payload", false},
+		{"obsidian://open?vault=notes", true},
+		{"vscode://file/f:/codes", true},
+		{"weird-protocol:payload", true},
+		{"1abc:payload", false},
 		{"", false},
 	}
 	for _, tc := range cases {

@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -172,7 +173,9 @@ func (m *Manager) update(mutate func(*Config) error, notify bool) error {
 	}
 	Normalize(&next)
 
-	if err := Save(m.path, next); err != nil {
+	// Only a structural change is worth a backup; window geometry is written every few hundred
+	// milliseconds and would otherwise replace the .bak with a copy of the current file.
+	if err := SaveWithBackup(m.path, next, needsBackup(base, next)); err != nil {
 		return err
 	}
 
@@ -232,8 +235,20 @@ func (m *Manager) syncLocked() (Config, error) {
 // On error it preserves the last valid in-memory config, calls onError, and returns the error.
 // The error is also kept as the reason to block writes until a later load succeeds.
 func (m *Manager) Reload() (Config, error) {
+	return m.reload(false)
+}
+
+// ReloadForce reads the file even when it did not change on disk and always notifies. The tray and
+// settings "reload" actions use it so the UI is refreshed on demand.
+func (m *Manager) ReloadForce() (Config, error) {
+	return m.reload(true)
+}
+
+func (m *Manager) reload(force bool) (Config, error) {
 	m.writeMu.Lock()
+	previousMark := m.mark
 	cfg, err := loadWithRetry(m.path)
+	unchanged := err == nil && !force && previousMark.ok && previousMark.same(markOf(m.path))
 	if err == nil {
 		m.mark = markOf(m.path)
 		m.mu.Lock()
@@ -250,7 +265,8 @@ func (m *Manager) Reload() (Config, error) {
 		return Config{}, err
 	}
 
-	if m.onUpdate != nil {
+	// A reload triggered by our own Save must not re-render the whole window.
+	if m.onUpdate != nil && !unchanged {
 		m.onUpdate(Clone(cfg))
 	}
 	return Clone(cfg), nil
@@ -334,11 +350,25 @@ func (m *Manager) Close() error {
 	return closeErr
 }
 
+// needsBackup reports whether a write changes something a user would want back: groups or any
+// setting other than window geometry and the folded-group list.
+func needsBackup(before, after Config) bool {
+	if !reflect.DeepEqual(before.Groups, after.Groups) {
+		return true
+	}
+	left, right := before.Settings, after.Settings
+	left.WindowX, left.WindowY, left.WindowWidth, left.WindowHeight = 0, 0, 0, 0
+	right.WindowX, right.WindowY, right.WindowWidth, right.WindowHeight = 0, 0, 0, 0
+	left.CollapsedGroups, right.CollapsedGroups = nil, nil
+	return !reflect.DeepEqual(left, right)
+}
+
 // confirmRemoved waits out the short window in which a replacing write looks like a deletion and
-// reports whether the configuration file is really gone.
-func (m *Manager) confirmRemoved(targetBase string) bool {
+// reports whether the configuration file is really gone. It stats the watched path itself: the
+// watch loop's targetBase is the file name, not its directory.
+func (m *Manager) confirmRemoved() bool {
 	time.Sleep(150 * time.Millisecond)
-	_, err := os.Stat(filepath.Join(targetBase, filepath.Base(m.path)))
+	_, err := os.Stat(m.path)
 	return errors.Is(err, os.ErrNotExist)
 }
 
@@ -365,7 +395,7 @@ func (m *Manager) watchLoop(watcher *fsnotify.Watcher, stopCh <-chan struct{}, d
 			if isConfigRemoval(event, targetBase) {
 				// A save that replaces the file also surfaces as a removal on Windows, so the
 				// handler only runs when the path is really gone after the write settles.
-				if !m.confirmRemoved(targetBase) {
+				if !m.confirmRemoved() {
 					continue
 				}
 				m.mu.RLock()

@@ -584,3 +584,56 @@ func TestCollapsedGroupsNormalizedAndPersisted(t *testing.T) {
 		t.Fatalf("collapsed groups = %v, want [grp-a grp-b]", loaded.Settings.CollapsedGroups)
 	}
 }
+
+// TestManagerDoesNotReportRemovalOnReplace guards the banner that appears when config.json is
+// gone from disk: saving replaces the file, which fsnotify reports as a removal on Windows, so the
+// watcher has to verify the path before telling the UI the file was deleted.
+func TestManagerDoesNotReportRemovalOnReplace(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+
+	mgr, err := NewManager(cfgPath, nil, nil)
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer func() {
+		if err := mgr.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	}()
+
+	if err := mgr.StartWatching(); err != nil {
+		t.Fatalf("StartWatching failed: %v", err)
+	}
+
+	removed := make(chan struct{}, 4)
+	mgr.SetRemovedHandler(func() {
+		select {
+		case removed <- struct{}{}:
+		default:
+		}
+	})
+
+	if err := mgr.Update(func(c *Config) error {
+		c.Settings.Hotkey = "Alt+4"
+		return nil
+	}); err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+
+	select {
+	case <-removed:
+		t.Fatal("replace save reported config.json as removed")
+	case <-time.After(700 * time.Millisecond):
+	}
+
+	if err := os.Remove(cfgPath); err != nil {
+		t.Fatalf("Remove failed: %v", err)
+	}
+
+	select {
+	case <-removed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for removal handler after the file was deleted")
+	}
+}

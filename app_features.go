@@ -206,6 +206,29 @@ func (a *App) pruneUsage(cfg config.Config) {
 	a.usageStore.Prune(keep)
 }
 
+// SetItemAdmin flips only the admin flag of an item. The frontend often holds a partial item (from
+// a search hit or the recent list); replacing the whole item with it would wipe the arguments and
+// working directory the user had saved.
+func (a *App) SetItemAdmin(groupID string, itemID string, admin bool) error {
+	mgr := a.configManager()
+	if mgr == nil {
+		return errors.New("配置管理器尚未就绪")
+	}
+	return mgr.Update(func(cfg *config.Config) error {
+		gIdx := findGroupIndex(cfg.Groups, groupID)
+		if gIdx < 0 {
+			return fmt.Errorf("未找到分组 %q", groupID)
+		}
+		for i := range cfg.Groups[gIdx].Items {
+			if cfg.Groups[gIdx].Items[i].ID == itemID {
+				cfg.Groups[gIdx].Items[i].Admin = admin
+				return nil
+			}
+		}
+		return fmt.Errorf("未找到项目 %q", itemID)
+	})
+}
+
 // MoveItem moves an item to another group and position, or reorders it inside its own group.
 func (a *App) MoveItem(fromGroupID string, itemID string, toGroupID string, toIndex int) error {
 	mgr := a.configManager()
@@ -445,10 +468,11 @@ func (a *App) ImportStartMenuItems(groupID string, lnkPaths []string) (int, erro
 
 	err := mgr.Update(func(cfg *config.Config) error {
 		idx := findGroupIndex(cfg.Groups, groupID)
-		if idx < 0 {
-			idx = 0
+		if idx < 0 && len(cfg.Groups) > 0 {
+			// Dropping imports into a group the user did not choose hides them; fail instead.
+			return fmt.Errorf("未找到分组 %q", groupID)
 		}
-		if len(cfg.Groups) == 0 {
+		if idx < 0 {
 			cfg.Groups = append(cfg.Groups, config.Group{ID: "default", Name: "常用工具", Items: []config.Item{}})
 			idx = 0
 		}
@@ -608,7 +632,11 @@ func (a *App) ImportConfig() (int, error) {
 		return 0, err
 	}
 
-	a.syncHooks(a.GetConfig().Settings, true)
+	importedCfg := a.GetConfig()
+	a.syncHooks(importedCfg.Settings, true)
+	// The imported settings carry auto_start; without this the registry keeps the old value while
+	// the settings page shows the new one.
+	a.syncAutostart(importedCfg)
 	a.emitToast("success", fmt.Sprintf("已导入 %d 个分组", len(imported.Groups)))
 	return len(imported.Groups), nil
 }
@@ -626,7 +654,7 @@ func (a *App) ApplyWindowState() {
 		if hwnd == 0 {
 			return
 		}
-		if cfg.Settings.WindowX == 0 && cfg.Settings.WindowY == 0 {
+		if !cfg.Settings.WindowPositioned {
 			// No saved position: appear on the monitor the cursor is on, which is where the user
 			// pressed the hotkey when several screens are attached.
 			centerOnCursorMonitor(hwnd)
@@ -676,7 +704,7 @@ func (a *App) flushWindowState() {
 	y := int(rect.Top)
 
 	cfg := a.GetConfig()
-	if cfg.Settings.WindowX == x && cfg.Settings.WindowY == y &&
+	if cfg.Settings.WindowPositioned && cfg.Settings.WindowX == x && cfg.Settings.WindowY == y &&
 		cfg.Settings.WindowWidth == width && cfg.Settings.WindowHeight == height {
 		return
 	}
@@ -686,6 +714,7 @@ func (a *App) flushWindowState() {
 		next.Settings.WindowY = y
 		next.Settings.WindowWidth = width
 		next.Settings.WindowHeight = height
+		next.Settings.WindowPositioned = true
 		return nil
 	}); err != nil {
 		log.Printf("[window] saving geometry failed: %v", err)
@@ -703,6 +732,7 @@ func (a *App) ResetWindowState() error {
 		cfg.Settings.WindowY = 0
 		cfg.Settings.WindowWidth = 0
 		cfg.Settings.WindowHeight = 0
+		cfg.Settings.WindowPositioned = false
 		return nil
 	})
 }
@@ -724,13 +754,12 @@ func lookupItem(cfg config.Config, groupID, itemID string) (string, config.Group
 
 // withDialog suppresses hide_on_blur while a native dialog is open.
 func (a *App) withDialog(open func() (string, error)) (string, error) {
-	previous := a.dialogOpen.Load()
-	a.dialogOpen.Store(true)
+	a.nativeDialogOpen.Store(true)
 	defer func() {
 		a.stateMu.Lock()
 		a.lastShown = time.Now()
 		a.stateMu.Unlock()
-		a.dialogOpen.Store(previous)
+		a.nativeDialogOpen.Store(false)
 	}()
 	return open()
 }

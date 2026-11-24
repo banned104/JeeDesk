@@ -6,7 +6,7 @@ import TopBar from './components/TopBar.vue';
 import GroupSidebar from './components/GroupSidebar.vue';
 import ItemGrid from './components/ItemGrid.vue';
 import ContextMenu, { type ContextMenuItem } from './components/ContextMenu.vue';
-import ItemEditModal from './components/ItemEditModal.vue';
+import ItemEditModal, { type ItemSaveRequest } from './components/ItemEditModal.vue';
 import SettingsModal from './components/SettingsModal.vue';
 import GroupModal from './components/GroupModal.vue';
 import ToastContainer from './components/ToastContainer.vue';
@@ -232,16 +232,19 @@ function openCreateItemModal() {
   itemModal.visible = true;
 }
 
-async function handleSaveItem(payload: { isNew: boolean; groupId: string; item: Item }) {
+async function handleSaveItem(request: ItemSaveRequest) {
   try {
-    if (payload.isNew) {
-      await bridge.addItem(payload.groupId, payload.item);
+    if (request.isNew) {
+      await bridge.addItem(request.groupId, request.item);
     } else {
-      await bridge.updateItem(payload.groupId, payload.item);
+      await bridge.updateItem(request.groupId, request.item);
     }
     itemModal.visible = false;
   } catch (err) {
     showToast({ type: 'error', message: `保存项目失败: ${String(err)}` });
+  } finally {
+    // Always report back: on failure the modal stays open and must accept another attempt.
+    request.done();
   }
 }
 

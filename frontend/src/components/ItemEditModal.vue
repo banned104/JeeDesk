@@ -5,6 +5,14 @@ import { bridge } from '../api/bridge';
 import { inferNameFromPath } from '../utils/icon';
 import ItemIcon from './ItemIcon.vue';
 
+export interface ItemSaveRequest {
+  isNew: boolean;
+  groupId: string;
+  item: Item;
+  // Called once the parent knows how the save went, so a failed save can be retried in place.
+  done: () => void;
+}
+
 const props = defineProps<{
   visible: boolean;
   item: Item | null;
@@ -14,7 +22,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'close'): void;
-  (e: 'save', payload: { isNew: boolean; groupId: string; item: Item }): void;
+  (e: 'save', request: ItemSaveRequest): void;
 }>();
 
 const isNew = computed(() => !props.item?.id);
@@ -99,6 +107,9 @@ function handleSubmit() {
       args: form.args.trim(),
       work_dir: form.work_dir.trim(),
       icon: form.icon.trim(),
+    },
+    done: () => {
+      saving.value = false;
     },
   });
 }

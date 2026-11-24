@@ -1,5 +1,35 @@
 import type { Item } from '../types/config';
 
+// File types whose shell-extracted icon is plain or unhelpful; these always
+// render a bundled SVG instead. Artwork from vscode-icons (MIT).
+const bundledIconByExt: Record<string, string> = {
+  bat: '/defaults/file_type_bat.svg',
+  cmd: '/defaults/file_type_bat.svg',
+  ps1: '/defaults/file_type_powershell.svg',
+};
+
+/** Bundled icons shown when no icon could be resolved for the target. */
+export const bundledFolderIconUrl = '/defaults/default_folder.svg';
+export const bundledFileIconUrl = '/defaults/default_file.svg';
+
+/**
+ * Returns a bundled default icon URL when the target's extension is covered,
+ * or an empty string when normal icon resolution should apply.
+ */
+export function bundledDefaultIconUrl(targetPath: string): string {
+  const trimmed = (targetPath || '').trim();
+  if (!trimmed) {
+    return '';
+  }
+  const parts = trimmed.split(/[\\/]/);
+  const baseName = parts[parts.length - 1] || '';
+  const dotIdx = baseName.lastIndexOf('.');
+  if (dotIdx <= 0) {
+    return '';
+  }
+  return bundledIconByExt[baseName.slice(dotIdx + 1).toLowerCase()] || '';
+}
+
 /**
  * Resolves an Item's icon path into a URL served by Wails AssetServer middleware,
  * or returns an empty string when the inline SVG fallback should be rendered.
@@ -40,6 +70,10 @@ export function isFolderLikePath(targetPath: string): boolean {
     return true;
   }
   const dotIdx = baseName.lastIndexOf('.');
+  // ".gitignore" 等点开头的文件没有扩展名意义上的主名，按文件处理
+  if (dotIdx === 0) {
+    return false;
+  }
   return dotIdx <= 0;
 }
 

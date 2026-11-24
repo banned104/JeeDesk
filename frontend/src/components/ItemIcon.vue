@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { isFolderLikePath, resolveItemIconUrl } from '../utils/icon';
+import {
+  bundledDefaultIconUrl,
+  bundledFileIconUrl,
+  bundledFolderIconUrl,
+  isFolderLikePath,
+  resolveItemIconUrl,
+} from '../utils/icon';
 
 const props = withDefaults(
   defineProps<{
@@ -18,14 +24,31 @@ const props = withDefaults(
 );
 
 const loadError = ref(false);
+const fallbackError = ref(false);
 
-const iconUrl = computed(() => resolveItemIconUrl(props.icon, props.cacheBuster));
+const iconUrl = computed(() => {
+  const icon = (props.icon || '').trim();
+  const targetPath = (props.path || '').trim();
+  // No dedicated custom icon set for this item: bundled types (e.g. .bat)
+  // render their stored SVG instead of the plain shell-extracted icon.
+  const sameAsTarget =
+    targetPath !== '' && icon.replace(/\\/g, '/').toLowerCase() === targetPath.replace(/\\/g, '/').toLowerCase();
+  if (!icon || sameAsTarget) {
+    const bundled = bundledDefaultIconUrl(targetPath);
+    if (bundled) {
+      return bundled;
+    }
+  }
+  return resolveItemIconUrl(icon, props.cacheBuster);
+});
 const isFolder = computed(() => isFolderLikePath(props.path));
+const fallbackUrl = computed(() => (isFolder.value ? bundledFolderIconUrl : bundledFileIconUrl));
 
 watch(
-  () => [props.icon, props.cacheBuster],
+  () => [props.icon, props.path, props.cacheBuster],
   () => {
     loadError.value = false;
+    fallbackError.value = false;
   }
 );
 </script>
@@ -44,6 +67,16 @@ watch(
       class="w-full h-full object-contain rounded-xl drop-shadow-sm"
       draggable="false"
       @error="loadError = true"
+    />
+
+    <!-- Bundled default icon (folder / plain file) when extraction failed or none set -->
+    <img
+      v-else-if="!fallbackError"
+      :src="fallbackUrl"
+      :alt="name"
+      class="w-full h-full object-contain rounded-xl drop-shadow-sm"
+      draggable="false"
+      @error="fallbackError = true"
     />
 
     <!-- Fallback Folder SVG -->

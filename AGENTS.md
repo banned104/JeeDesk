@@ -50,7 +50,7 @@
 | CHANGELOG | 根目录 `CHANGELOG.md`，目前只有「开发中」区域，按「维护主题 → 变化类型 → 条目」维护，尚无正式版本章节。 |
 | 债务 | 根目录 `TODO.md`（Skill 默认），出现已确认债务时创建，目前不存在。 |
 | 任务记录 | 见[复杂任务记录与归档](#复杂任务记录与归档)。 |
-| 正式文档 | 尚无 README 及接口、配置、架构、部署文档。当前事实以代码为准：配置结构见 `internal/config/schema.go`；后端绑定见 `app.go` 的导出方法与 `frontend/src/api/bridge.ts` 的 `WailsGoApp` 接口。 |
+| 正式文档 | `README.md`（项目介绍、构建、配置与图标机制、GeekDesk 迁移概要）、`docs/geekdesk-migration.md`（迁移详细过程）。事实以代码为准：配置结构见 `internal/config/schema.go`；后端绑定见 `app.go` 的导出方法与 `frontend/src/api/bridge.ts` 的 `WailsGoApp` 接口。 |
 | 发布与运行 | 目标环境是 Windows 桌面会话。远程仓库是 `origin`（`https://github.com/banned104/JeeDesk.git`，2026-11-24 添加），没有 CI 和发布流程。Push、Tag、Release、部署按 Skill 需用户明确授权；推送前先过一遍[不上传的本地内容](#不上传的本地内容)。 |
 
 ## 构建与验证

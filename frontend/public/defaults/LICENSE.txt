@@ -1,0 +1,4 @@
+default_file.svg, default_folder.svg, file_type_bat.svg, file_type_powershell.svg
+来自 vscode-icons 项目 (https://github.com/vscode-icons/vscode-icons)，按 MIT 许可使用，
+取自提交 4cf5fa03f4a8653b6ccae237a499dec2cc3d512f。
+MIT License Copyright (c) The vscode-icons Contributors（原文见 vscode-icons 仓库 LICENSE）。

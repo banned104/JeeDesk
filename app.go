@@ -57,6 +57,10 @@ type App struct {
 	configPath string
 	iconsDir   string
 
+	// startHidden records whether this launch should stay in the tray. It covers both
+	// settings.start_hidden and --silent, and is written once before wails.Run starts.
+	startHidden bool
+
 	// cfgMu guards cfgMgr, which ReloadConfig may replace while bound methods read it.
 	cfgMu         sync.RWMutex
 	cfgMgr        *config.Manager
@@ -325,7 +329,9 @@ func (a *App) domReady(_ context.Context) {
 
 	// With start_hidden the window stays closed until the hotkey or the tray opens it, so it must
 	// not be marked visible here or the blur monitor would treat it as an open window.
-	if !a.GetConfig().Settings.StartHidden {
+	if a.startHidden {
+		go a.hideAfterWebviewShow()
+	} else {
 		a.stateMu.Lock()
 		a.visible = true
 		a.lastShown = time.Now()
@@ -692,6 +698,28 @@ func (a *App) shouldHideOnBlur() bool {
 // modalOpen reports whether a dialog of any kind is on screen.
 func (a *App) modalOpen() bool {
 	return a.nativeDialogOpen.Load() || a.uiModalOpen.Load()
+}
+
+// hideAfterWebviewShow hides the panel once Wails has finished its own "make the webview visible"
+// call. Wails runs OnDomReady before that call, so an immediate WindowHide would be undone; the
+// delayed hides stop as soon as the panel counts as shown, so a fast hotkey press wins.
+func (a *App) hideAfterWebviewShow() {
+	for _, delay := range []time.Duration{150 * time.Millisecond, 700 * time.Millisecond} {
+		time.Sleep(delay)
+		// The panel counts as shown only after ShowWindow or ToggleWindow ran; the raw Win32
+		// visibility is still true here because Wails just showed the webview itself.
+		a.stateMu.Lock()
+		shown := a.visible
+		a.stateMu.Unlock()
+		if shown {
+			return
+		}
+		ctx := a.context()
+		if ctx == nil {
+			return
+		}
+		runtime.WindowHide(ctx)
+	}
 }
 
 // ShowWindow displays JeeDesk and brings it to the foreground.

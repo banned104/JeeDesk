@@ -78,6 +78,7 @@ func main() {
 	if silentLaunch() {
 		startHidden = true
 	}
+	app.startHidden = startHidden
 
 	err = wails.Run(&options.App{
 		Title:            "JeeDesk",

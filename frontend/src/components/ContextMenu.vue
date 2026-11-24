@@ -76,18 +76,18 @@ onBeforeUnmount(() => {
         v-if="visible"
         ref="menuRef"
         :style="clampedPosition"
-        class="fixed z-50 min-w-[164px] py-1.5 rounded-xl glass-modal border border-white/15 shadow-2xl text-xs text-slate-100 select-none"
+        class="fixed z-50 min-w-[164px] py-1.5 rounded-xl glass-modal border jd-border-strong shadow-2xl text-xs jd-text select-none"
         @contextmenu.prevent
       >
         <template v-for="item in items" :key="item.id">
-          <div v-if="item.dividerBefore" class="my-1 border-t border-white/10" />
+          <div v-if="item.dividerBefore" class="my-1 border-t jd-border" />
           <button
             type="button"
             class="w-full px-3 py-1.5 flex items-center gap-2.5 text-left transition-colors"
             :class="
               item.danger
                 ? 'text-rose-300 hover:bg-rose-500/20 hover:text-rose-200'
-                : 'text-slate-200 hover:bg-white/10 hover:text-white'
+                : 'jd-text jd-hover'
             "
             @click="emit('select', item.id)"
           >

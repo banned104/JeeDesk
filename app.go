@@ -233,16 +233,9 @@ func (a *App) startup(ctx context.Context) {
 		}
 	}
 
-	runtime.OnFileDrop(ctx, func(_ int, _ int, paths []string) {
-		if len(paths) == 0 {
-			return
-		}
-		groupID := a.getActiveGroupID()
-		if err := a.AddDroppedFiles(groupID, paths); err != nil {
-			a.emitToast("error", fmt.Sprintf("添加拖入文件失败: %v", err))
-		}
-	})
-
+	// File drops are handled by the frontend, which knows the selected group: it calls
+	// AddDroppedFiles through the bridge from window.runtime.OnFileDrop. Subscribing here as well
+	// would add every dropped file twice.
 	tray.Start(tray.Callbacks{
 		OnToggle: func() {
 			a.ToggleWindow()

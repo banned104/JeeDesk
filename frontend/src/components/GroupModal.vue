@@ -42,15 +42,15 @@ function handleSubmit() {
         @mousedown.self="emit('close')"
       >
         <div
-          class="w-full max-w-sm rounded-2xl glass-modal border border-white/15 shadow-2xl overflow-hidden"
+          class="w-full max-w-sm rounded-2xl glass-modal border jd-border-strong shadow-2xl overflow-hidden"
         >
-          <div class="px-5 py-3.5 border-b border-white/10 flex items-center justify-between">
-            <h2 class="text-sm font-semibold text-white">
+          <div class="px-5 py-3.5 border-b jd-border flex items-center justify-between">
+            <h2 class="text-sm font-semibold jd-text">
               {{ mode === 'add' ? '新建分组' : '重命名分组' }}
             </h2>
             <button
               type="button"
-              class="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
+              class="w-7 h-7 rounded-lg flex items-center justify-center jd-muted jd-hover transition-colors"
               @click="emit('close')"
             >
               <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -61,21 +61,21 @@ function handleSubmit() {
 
           <form class="p-5 space-y-4 text-xs" @submit.prevent="handleSubmit">
             <label class="block space-y-1.5">
-              <span class="text-slate-300 font-medium">分组名称</span>
+              <span class="jd-muted font-medium">分组名称</span>
               <input
                 ref="inputRef"
                 v-model="name"
                 type="text"
                 required
                 placeholder="例如：办公软件、开发工具"
-                class="w-full h-9 px-3 rounded-xl bg-white/[0.06] border border-white/10 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-sky-400/60 focus:bg-white/[0.09] transition-colors"
+                class="w-full h-9 px-3 rounded-xl jd-input border transition-colors"
               />
             </label>
 
             <div class="flex items-center justify-end gap-2">
               <button
                 type="button"
-                class="px-4 h-8 rounded-xl bg-white/[0.06] hover:bg-white/10 text-slate-300 border border-white/10 transition-colors"
+                class="px-4 h-8 rounded-xl jd-surface jd-muted jd-hover border jd-border transition-colors"
                 @click="emit('close')"
               >
                 取消

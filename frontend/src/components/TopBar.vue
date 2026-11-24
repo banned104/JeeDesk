@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { ref } from 'vue';
+
 defineProps<{
   searchQuery: string;
   activeGroupName?: string;
@@ -11,25 +13,41 @@ const emit = defineEmits<{
   (e: 'openSettings'): void;
   (e: 'hide'): void;
 }>();
+
+const searchInputRef = ref<HTMLInputElement | null>(null);
+
+// App.vue drives "type anywhere" and the "/" shortcut through these two methods.
+function focusSearch() {
+  const input = searchInputRef.value;
+  if (!input) return;
+  input.focus();
+  input.select();
+}
+
+function blurSearch() {
+  searchInputRef.value?.blur();
+}
+
+defineExpose({ focusSearch, blurSearch });
 </script>
 
 <template>
   <header
-    class="wails-drag h-11 px-3.5 flex items-center justify-between gap-3 border-b border-white/10 bg-white/[0.03] shrink-0"
+    class="wails-drag h-11 px-3.5 flex items-center justify-between gap-3 border-b jd-border jd-surface-soft shrink-0"
     style="--wails-draggable: drag"
   >
     <!-- Brand -->
     <div class="flex items-center gap-2.5 min-w-0">
-      <div class="w-6 h-6 rounded-lg bg-white/[0.06] border border-white/15 flex items-center justify-center shrink-0 p-[1px]">
+      <div class="w-6 h-6 rounded-lg jd-surface border jd-border-strong flex items-center justify-center shrink-0 p-[1px]">
         <img src="/brand-m9.png" alt="" class="w-full h-full object-contain scale-110" aria-hidden="true" />
       </div>
-      <span class="text-sm font-semibold tracking-wide text-white/95">JeeDesk</span>
+      <span class="text-sm font-semibold tracking-wide jd-text">JeeDesk</span>
       <span
         v-if="activeGroupName"
-        class="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-white/[0.07] text-slate-300 border border-white/10 truncate max-w-[140px]"
+        class="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] jd-surface-soft jd-muted border jd-border truncate max-w-[140px]"
       >
         <span class="truncate">{{ activeGroupName }}</span>
-        <span v-if="typeof itemCount === 'number'" class="text-slate-400">· {{ itemCount }}</span>
+        <span v-if="typeof itemCount === 'number'" class="jd-subtle">· {{ itemCount }}</span>
       </span>
     </div>
 
@@ -38,7 +56,7 @@ const emit = defineEmits<{
       <!-- Quick Filter -->
       <div class="relative flex items-center">
         <svg
-          class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 pointer-events-none"
+          class="w-3.5 h-3.5 jd-subtle absolute left-2.5 pointer-events-none"
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
@@ -48,17 +66,18 @@ const emit = defineEmits<{
           <path stroke-linecap="round" d="M20 20l-3.5-3.5" />
         </svg>
         <input
+          ref="searchInputRef"
           :value="searchQuery"
           type="text"
-          placeholder="搜索项目..."
-          class="w-36 sm:w-44 h-7 pl-7 pr-6 rounded-lg bg-white/[0.06] border border-white/10 text-xs text-slate-100 placeholder:text-slate-400 focus:outline-none focus:bg-white/[0.1] focus:border-sky-400/50 transition-all"
+          placeholder="搜索项目…（/）"
+          class="w-36 sm:w-44 h-7 pl-7 pr-6 rounded-lg jd-input border text-xs transition-all"
           @input="emit('update:searchQuery', ($event.target as HTMLInputElement).value)"
         />
         <button
           v-if="searchQuery"
           type="button"
           title="清除搜索"
-          class="absolute right-1.5 text-slate-400 hover:text-white p-0.5 rounded transition-colors"
+          class="absolute right-1.5 p-0.5 rounded jd-subtle jd-hover transition-colors"
           @click="emit('update:searchQuery', '')"
         >
           <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
@@ -71,7 +90,7 @@ const emit = defineEmits<{
       <button
         type="button"
         title="手动添加项目"
-        class="h-7 px-2 rounded-lg flex items-center gap-1 text-xs text-slate-300 hover:text-white hover:bg-white/10 border border-transparent hover:border-white/10 transition-all"
+        class="h-7 px-2 rounded-lg flex items-center gap-1 text-xs jd-muted jd-hover border border-transparent transition-all"
         @click="emit('addItem')"
       >
         <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
@@ -84,7 +103,7 @@ const emit = defineEmits<{
       <button
         type="button"
         title="设置"
-        class="w-7 h-7 rounded-lg flex items-center justify-center text-slate-300 hover:text-white hover:bg-white/10 border border-transparent hover:border-white/10 transition-all"
+        class="w-7 h-7 rounded-lg flex items-center justify-center jd-muted jd-hover border border-transparent transition-all"
         @click="emit('openSettings')"
       >
         <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
@@ -101,7 +120,7 @@ const emit = defineEmits<{
       <button
         type="button"
         title="隐藏窗口 (Esc)"
-        class="w-7 h-7 rounded-lg flex items-center justify-center text-slate-300 hover:text-rose-200 hover:bg-rose-500/20 border border-transparent hover:border-rose-400/20 transition-all"
+        class="w-7 h-7 rounded-lg flex items-center justify-center jd-muted hover:text-rose-200 hover:bg-rose-500/20 border border-transparent hover:border-rose-400/20 transition-all"
         @click="emit('hide')"
       >
         <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

@@ -13,7 +13,125 @@ body,
   overflow: hidden;
   user-select: none;
   -webkit-font-smoothing: antialiased;
-  color: rgba(248, 250, 252, 0.94);
+  color: var(--jd-text);
+}
+
+/*
+ * Theme tokens. Components use the semantic jd-* classes below instead of hard-coded white/slate
+ * utilities, so switching between dark, light, and the system preference needs no markup changes.
+ */
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --jd-text: rgba(248, 250, 252, 0.95);
+  --jd-muted: rgba(148, 163, 184, 0.92);
+  --jd-subtle: rgba(148, 163, 184, 0.66);
+  --jd-surface: rgba(255, 255, 255, 0.06);
+  --jd-surface-soft: rgba(255, 255, 255, 0.03);
+  --jd-surface-strong: rgba(255, 255, 255, 0.13);
+  --jd-hover: rgba(255, 255, 255, 0.1);
+  --jd-border: rgba(255, 255, 255, 0.12);
+  --jd-border-strong: rgba(255, 255, 255, 0.2);
+  --jd-panel: rgba(18, 22, 32, 0.74);
+  --jd-modal: rgba(20, 25, 37, 0.94);
+  --jd-accent: #38bdf8;
+  --jd-accent-soft: rgba(56, 189, 248, 0.16);
+  --jd-scroll-thumb: rgba(255, 255, 255, 0.14);
+  --jd-scroll-thumb-hover: rgba(255, 255, 255, 0.28);
+  --jd-shadow: 0 24px 60px rgba(2, 6, 23, 0.55);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --jd-text: #0f172a;
+  --jd-muted: #475569;
+  --jd-subtle: #64748b;
+  --jd-surface: rgba(15, 23, 42, 0.045);
+  --jd-surface-soft: rgba(15, 23, 42, 0.025);
+  --jd-surface-strong: rgba(15, 23, 42, 0.1);
+  --jd-hover: rgba(15, 23, 42, 0.07);
+  --jd-border: rgba(15, 23, 42, 0.12);
+  --jd-border-strong: rgba(15, 23, 42, 0.2);
+  --jd-panel: rgba(248, 250, 252, 0.88);
+  --jd-modal: rgba(255, 255, 255, 0.97);
+  --jd-accent: #0284c7;
+  --jd-accent-soft: rgba(2, 132, 199, 0.12);
+  --jd-scroll-thumb: rgba(15, 23, 42, 0.18);
+  --jd-scroll-thumb-hover: rgba(15, 23, 42, 0.32);
+  --jd-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
+}
+
+/* Semantic classes shared by every component. */
+.jd-text {
+  color: var(--jd-text);
+}
+
+.jd-muted {
+  color: var(--jd-muted);
+}
+
+.jd-subtle {
+  color: var(--jd-subtle);
+}
+
+.jd-surface {
+  background-color: var(--jd-surface);
+}
+
+.jd-surface-soft {
+  background-color: var(--jd-surface-soft);
+}
+
+.jd-surface-strong {
+  background-color: var(--jd-surface-strong);
+}
+
+.jd-border {
+  border-color: var(--jd-border);
+}
+
+.jd-border-strong {
+  border-color: var(--jd-border-strong);
+}
+
+.jd-hover:hover {
+  background-color: var(--jd-hover);
+  color: var(--jd-text);
+}
+
+.jd-accent {
+  color: var(--jd-accent);
+}
+
+.jd-accent-bg {
+  background-color: var(--jd-accent);
+}
+
+/* Native selects and inputs need explicit colours in light mode. */
+.jd-input {
+  background-color: var(--jd-surface);
+  border-color: var(--jd-border);
+  color: var(--jd-text);
+}
+
+.jd-input::placeholder {
+  color: var(--jd-subtle);
+}
+
+.jd-input:focus {
+  outline: none;
+  border-color: var(--jd-accent);
+  background-color: var(--jd-surface-strong);
+}
+
+.jd-input option {
+  background-color: #0f172a;
+  color: #f8fafc;
+}
+
+:root[data-theme='light'] .jd-input option {
+  background-color: #ffffff;
+  color: #0f172a;
 }
 
 /* Wails v2 drag region helpers */
@@ -37,15 +155,17 @@ body,
 
 /* Frosted glass surface */
 .glass-panel {
-  background: rgba(18, 22, 32, 0.72);
+  background: var(--jd-panel);
   backdrop-filter: blur(22px) saturate(140%);
   -webkit-backdrop-filter: blur(22px) saturate(140%);
+  box-shadow: var(--jd-shadow);
 }
 
 .glass-modal {
-  background: rgba(20, 25, 37, 0.92);
+  background: var(--jd-modal);
   backdrop-filter: blur(24px) saturate(150%);
   -webkit-backdrop-filter: blur(24px) saturate(150%);
+  box-shadow: var(--jd-shadow);
 }
 
 /* Slim dark scrollbar */
@@ -59,12 +179,12 @@ body,
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.14);
+  background: var(--jd-scroll-thumb);
   border-radius: 9999px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.28);
+  background: var(--jd-scroll-thumb-hover);
 }
 
 /* Modal & toast transitions */

@@ -9,16 +9,17 @@ const emit = defineEmits<{
   (e: 'dismiss', id: number): void;
 }>();
 
+// Toasts keep a state-coloured tint + border, but the text follows the theme so light mode stays readable.
 function badgeClass(type: ToastMessage['type']): string {
   switch (type) {
     case 'success':
-      return 'border-emerald-400/30 bg-emerald-950/80 text-emerald-100';
+      return 'border-emerald-400/40 bg-emerald-500/15 jd-text';
     case 'warning':
-      return 'border-amber-400/30 bg-amber-950/80 text-amber-100';
+      return 'border-amber-400/40 bg-amber-500/15 jd-text';
     case 'error':
-      return 'border-rose-400/40 bg-rose-950/85 text-rose-100';
+      return 'border-rose-400/50 bg-rose-500/20 jd-text';
     default:
-      return 'border-sky-400/30 bg-slate-900/90 text-slate-100';
+      return 'border-sky-400/40 bg-sky-500/15 jd-text';
   }
 }
 </script>
@@ -36,7 +37,7 @@ function badgeClass(type: ToastMessage['type']): string {
           <span class="flex-1 leading-snug break-words">{{ toast.message }}</span>
           <button
             type="button"
-            class="text-white/60 hover:text-white shrink-0"
+            class="shrink-0 rounded p-0.5 jd-subtle jd-hover transition-colors"
             @click="emit('dismiss', toast.id)"
           >
             <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

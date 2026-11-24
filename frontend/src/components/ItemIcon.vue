@@ -82,7 +82,7 @@ watch(
     <!-- Fallback Folder SVG -->
     <div
       v-else-if="isFolder"
-      class="w-full h-full rounded-xl bg-amber-400/15 border border-amber-300/20 flex items-center justify-center text-amber-300"
+      class="w-full h-full rounded-xl bg-amber-400/15 border border-amber-400/30 flex items-center justify-center text-amber-600"
     >
       <svg class="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
         <path
@@ -96,7 +96,7 @@ watch(
     <!-- Fallback Application SVG -->
     <div
       v-else
-      class="w-full h-full rounded-xl bg-sky-400/15 border border-sky-300/20 flex items-center justify-center text-sky-300"
+      class="w-full h-full rounded-xl bg-sky-400/15 border border-sky-400/30 flex items-center justify-center jd-accent"
     >
       <svg class="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
         <rect x="3.5" y="4.5" width="17" height="15" rx="3" />

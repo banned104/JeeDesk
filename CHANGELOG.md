@@ -19,7 +19,8 @@
 - 项目与分组支持拖动排序和跨分组移动（`MoveItem` / `MoveGroup`），落盘顺序即显示顺序。
 - 开始菜单导入：扫描用户与全局两处「开始菜单」的 `.lnk`，可搜索、按范围筛选、多选导入，
   自动跳过重复条目。
-- 删除项目或分组后 5 秒内可撤销（`Ctrl+Z`）；分组删除前显示包含的项目数。
+- 删除项目或分组后可用 `Ctrl+Z` 撤销；撤销快照保留到下一次删除或程序退出（不设时限），
+  分组删除前显示包含的项目数。
 - 单击还是双击启动可在设置里切换（`settings.click_mode`，默认双击）。
 - 管理员启动（`item.admin`）：通过 UAC 提权打开目标，取消提权不算失败也不计入最近使用。
 
@@ -33,6 +34,7 @@
 - 图标缓存按目标路径哈希命名，命中即复用；启动时补齐缺失图标，并清理无人引用的孤儿 PNG。
 - 失效目标检测：目标文件不存在的条目在网格里显示警示点。
 - 同一份 `config.json` 只允许一个实例；单实例名由数据目录哈希派生，因此便携副本可以与安装版并存。
+  旧版本使用的固定互斥体名仍会检查，升级后不会与旧进程同时运行。
 
 #### 修复
 
@@ -45,6 +47,11 @@
 - 删除/改名 `config.json` 后界面显示可操作横幅（重建文件、打开数据目录），不再静默。
 - 鼠标呼出取值非法时回退到 `none`，并在界面提示原始值。
 - 自定义图标接口只接受本地绝对路径，拒绝 UNC 与设备路径。
+- 管理员项目只启动一次：此前 `LaunchItem` 先按普通进程启动再提权，会留下一个未提权的副本。
+- 图标缓存按目标修改时间校验，命中缓存但目标已被替换时重新提取，不再显示旧图标。
+- 数据目录不可写时回退到 `%LOCALAPPDATA%\JeeDesk`，避免启动即失败。
+- 「清理图标缓存」在配置读取失败或没有任何分组时跳过，不会清掉仍被引用的图标。
+- 启动时检测到上次异常退出、单实例唤醒、日志写入都在主实例确认后执行，副实例不再写日志或默认配置。
 
 ### 外观、设置与无障碍
 
@@ -56,10 +63,12 @@
 - 语言切换 `zh`/`en`：前端文案通过 `frontend/src/i18n.ts` 的 `t()` 与各组件
   `registerTranslations` 提供英文，缺失翻译回退中文。
 - 设置页新增「关于/更新」：版本、数据目录、日志路径、检查更新（只提示并打开下载页）、
-  清理图标缓存。
+  清理图标缓存、补齐缺失图标。
 - 弹窗打开时通知后端（`App.SetModalOpen`），避免切走窗口时丢掉正在编辑的内容。
 - 严格失焦隐藏（`settings.hide_on_blur_strict`）：光标停在面板上也随失焦隐藏。
 - 分组折叠状态持久化（`settings.collapsed_groups`），侧栏可逐组折叠。
+- 删除分组、清理图标等不可逆操作统一走 `ConfirmDialog`，不再使用浏览器 `confirm`。
+- 顶栏品牌角标与 `JeeDesk.exe` 图标同源（`build/appicon.png` 系列）。
 
 #### 修复
 
@@ -74,11 +83,21 @@
 
 - `config.json` 新增字段（均有默认值，旧文件无需迁移）：`mouse_swallow`、`click_mode`、
   `auto_start`、`start_hidden`、`theme`、`language`、`show_recent`、`collapsed_groups`、
-  `window_opacity`、`window_width/height`、`window_x/y`、`font_scale`、`hide_on_blur_strict`；
+  `window_opacity`、`window_width/height`、`window_x/y`、`window_positioned`、
+  `font_scale`、`hide_on_blur_strict`；
   `Item` 新增 `admin`。`frontend/src/types/config.ts` 与 `bridge.ts` 已同步。
 - 托盘图标改为与窗口、可执行文件一致的刀形标（内嵌 32×32 ICO），托盘菜单新增
   「打开数据目录」「查看日志」。
-- `JEEDESK_BASE_DIR` 可覆盖数据目录，`JEEDESK_DEV=1` 显式声明开发运行。
+- `JEEDESK_BASE_DIR` 可覆盖数据目录，`JEEDESK_DEV=1` 显式声明开发运行；`--silent`
+  启动时不显示面板（供开机自启使用）。
+- 新增绑定方法 `App.OpenURL`（只允许 http/https）、`App.SetItemAdmin`、
+  `App.CheckUpdates`、`App.EnsureIcons`、`App.SetModalOpen`、`App.HasUndo`；
+  `frontend/src/api/bridge.ts` 的 `WailsGoApp` 与 `frontend/src/types/config.ts` 已同步。
+- 设置保存不再接受前端传来的窗口几何：窗口位置由 `App.WindowPositioned` 在后端记录，
+  前端无法覆盖内存中的几何值。
+- 窗口几何变化不再触发 `config.json` 备份轮转，仅内容类修改会备份。
+- WebView2 用户数据目录固定到 `<baseDir>/webview`，便携副本不会共用同一个缓存目录。
+- 托盘图标改为刀形标后，`internal/tray` 的内置图标与 `build/appicon` 系列保持一致。
 
 ### 配置管理
 
@@ -105,7 +124,8 @@
 
 #### 变更
 
-- 手动重载配置会重试尚未生效的快捷键。
+- 手动重载配置会重试尚未生效的快捷键，并且强制重新加载（`ReloadForce`），
+  即使文件内容与内存一致也会重新注册钩子。
 
 ### 分组与项目
 
@@ -133,6 +153,8 @@
 #### 修复
 
 - 设置页的「录制」按钮点击后可以捕获按键：点击不再把焦点移出输入框，开启录制时聚焦输入框。
+- `config.json` 被外部修改后不再误报「文件已删除」：监听器在 150ms 后确认目标仍未出现才提示。
+- 保存设置时若快捷键注册失败，界面保持打开的设置页并显示失败项，可以改完直接重试。
 - 无边框窗口在 Windows 11 使用系统圆角（DWM `DWMWA_WINDOW_CORNER_PREFERENCE`），去掉面板
   圆角外的 2px 缝隙、面板圆角改为与系统 8px 一致：Acrylic 底不再从四角露出来。
 
@@ -146,6 +168,10 @@
   同名文件不再被当成自己的配置，也就不会被覆盖。
 - `app.go` 中 `ctx` 的访问加了锁，`cfgMgr` 改在任何其他 goroutine 出现之前创建，
   消除了启动期间再次启动实例时的数据竞争。
+- 单实例判定提前到读取配置之前：第二个实例不再使用默认配置覆盖磁盘上的 `config.json`，
+  也不会因为日志初始化失败而留下半初始化的状态。
+- `ctx` 尚未就绪时收到的唤醒请求会记为 `pendingShow`，就绪后补一次显示，不再丢失。
+- 退出时停止图标补齐定时器，避免退出过程中还去写缓存目录。
 
 ### 启动器
 
@@ -153,6 +179,9 @@
 
 - PATH 中没有 PowerShell 时，`.ps1` 项目改用 `%SystemRoot%` 下的完整路径启动
   （`internal/launcher` 的 `findPowerShell`）。
+- 自定义协议链接（`obsidian://`、`vscode://` 等）恢复按系统协议打开：URL 判定改为
+  「合法 scheme 且不是盘符」，不再限制在白名单内。
+- 开始菜单导入时指定了不存在的分组会返回错误，而不是把条目丢进第一个分组。
 
 ### 工程与仓库
 
@@ -175,3 +204,5 @@
   不纳入版本管理。
 - 图标有两个来源：应用图标以 `build/appicon.png`（源在 `assets/`）为准；`go run build/genicon.go`
   仍会用 `internal/tray` 的内置托盘图标覆盖 `build/windows/icon.ico`。
+- 内存中的窗口几何（`window_x/y`、`window_positioned`）不再由前端回写；
+  需要记录位置时调用 `App.WindowPositioned`。

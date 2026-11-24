@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -37,6 +38,25 @@ const (
 	triggerCodeMiddle
 	triggerCodeXButton1
 	triggerCodeXButton2
+)
+
+const (
+	// mouseHookEventTimeout is how long the hook may stay silent while the
+	// system keeps receiving input before it is considered dead.
+	mouseHookEventTimeout = 6 * time.Second
+	mouseHookWatchdogTick = 3 * time.Second
+	mouseHookStopTimeout  = 2 * time.Second
+)
+
+type lastInputInfo struct {
+	CbSize uint32
+	Time   uint32
+}
+
+var (
+	modKernel32Hook         = windows.NewLazySystemDLL("kernel32.dll")
+	procGetTickCount64      = modKernel32Hook.NewProc("GetTickCount64")
+	procGetLastInputInfoRef = user32.NewProc("GetLastInputInfo")
 )
 
 type msllHookStruct struct {
@@ -83,25 +103,45 @@ type MouseHookManager struct {
 	activeTrigger atomic.Int32
 	hhook         atomic.Uintptr
 	tid           atomic.Uint32
+	swallowInput  atomic.Bool
+	lastEventTick atomic.Uint64
+	rehookCount   atomic.Uint32
 
 	swallowedMiddle atomic.Bool
 	swallowedX1     atomic.Bool
 	swallowedX2     atomic.Bool
 
-	mu         sync.Mutex
-	running    bool
-	done       chan struct{}
-	stopWorker chan struct{}
-	workerDone chan struct{}
+	mu           sync.Mutex
+	running      bool
+	done         chan struct{}
+	stopWorker   chan struct{}
+	workerDone   chan struct{}
+	watchdogStop chan struct{}
+	watchdogDone chan struct{}
 }
 
 // NewMouseHookManager creates a MouseHookManager that invokes onTrigger asynchronously
 // when the configured mouse button is pressed.
 func NewMouseHookManager(onTrigger func()) *MouseHookManager {
-	return &MouseHookManager{
+	m := &MouseHookManager{
 		onTrigger: onTrigger,
 		triggerCh: make(chan struct{}, 1),
 	}
+	m.swallowInput.Store(true)
+	return m
+}
+
+// SetSwallowInput controls whether the trigger button is consumed system-wide.
+// When false the hook still triggers the panel but lets the button reach the
+// foreground application, so middle-click scrolling and back/forward keep working.
+func (m *MouseHookManager) SetSwallowInput(swallow bool) {
+	m.swallowInput.Store(swallow)
+}
+
+// RehookCount reports how many times the watchdog had to rebuild the hook. It is
+// exposed for diagnostics and tests.
+func (m *MouseHookManager) RehookCount() uint32 {
+	return m.rehookCount.Load()
 }
 
 // Update validates trigger and starts, updates, or stops the low-level mouse hook.
@@ -116,7 +156,13 @@ func (m *MouseHookManager) Update(trigger string) error {
 	defer m.mu.Unlock()
 
 	code := triggerToCode(normalized)
+	changed := code != m.activeTrigger.Load()
 	m.activeTrigger.Store(code)
+	if changed {
+		// Drop any swallow state left over from the previous trigger so a
+		// pending button-up cannot be eaten by the new configuration.
+		m.resetState()
+	}
 
 	if code == triggerCodeNone {
 		m.stopLocked()
@@ -124,9 +170,13 @@ func (m *MouseHookManager) Update(trigger string) error {
 	}
 
 	if m.running {
-		return nil
+		// Windows silently unhooks low-level hooks whose callback times out.
+		// A running manager with no live hhook must be rebuilt, not ignored.
+		if m.hhook.Load() != 0 {
+			return nil
+		}
+		m.stopLocked()
 	}
-
 	return m.startLocked()
 }
 
@@ -214,6 +264,7 @@ func (m *MouseHookManager) startLocked() error {
 	m.done = done
 	m.stopWorker = stopWorker
 	m.workerDone = workerDone
+	m.startWatchdogLocked()
 	return nil
 }
 
@@ -222,13 +273,23 @@ func (m *MouseHookManager) stopLocked() {
 		return
 	}
 
+	m.stopWatchdogLocked()
+
 	if tid := m.tid.Load(); tid != 0 {
 		_ = postThreadMessage(tid, WM_QUIT, 0, 0)
 	}
-	<-m.done
+	select {
+	case <-m.done:
+	case <-time.After(mouseHookStopTimeout):
+	}
 
 	close(m.stopWorker)
-	<-m.workerDone
+	select {
+	case <-m.workerDone:
+	case <-time.After(mouseHookStopTimeout):
+	}
+	m.hhook.Store(0)
+	m.tid.Store(0)
 
 	m.resetState()
 	m.running = false
@@ -248,15 +309,19 @@ func (m *MouseHookManager) resetState() {
 }
 
 func (m *MouseHookManager) lowLevelMouseProc(nCode uintptr, wParam uintptr, lParam unsafe.Pointer) uintptr {
+	m.noteEvent()
 	if int32(nCode) >= hcAction {
 		trigger := m.activeTrigger.Load()
 
 		switch wParam {
 		case wmMButtonDown:
 			if trigger == triggerCodeMiddle {
-				m.swallowedMiddle.Store(true)
 				m.notifyTrigger()
-				return 1
+				if m.swallowInput.Load() {
+					m.swallowedMiddle.Store(true)
+					return 1
+				}
+				return 0
 			}
 		case wmMButtonUp:
 			if m.swallowedMiddle.Swap(false) {
@@ -267,14 +332,20 @@ func (m *MouseHookManager) lowLevelMouseProc(nCode uintptr, wParam uintptr, lPar
 				msll := (*msllHookStruct)(lParam)
 				xb := uint16(msll.MouseData >> 16)
 				if xb == xButton1 && trigger == triggerCodeXButton1 {
-					m.swallowedX1.Store(true)
 					m.notifyTrigger()
-					return 1
+					if m.swallowInput.Load() {
+						m.swallowedX1.Store(true)
+						return 1
+					}
+					return 0
 				}
 				if xb == xButton2 && trigger == triggerCodeXButton2 {
-					m.swallowedX2.Store(true)
 					m.notifyTrigger()
-					return 1
+					if m.swallowInput.Load() {
+						m.swallowedX2.Store(true)
+						return 1
+					}
+					return 0
 				}
 			}
 		case wmXButtonUp:
@@ -293,6 +364,91 @@ func (m *MouseHookManager) lowLevelMouseProc(nCode uintptr, wParam uintptr, lPar
 
 	r1, _, _ := procCallNextHookEx.Call(m.hhook.Load(), nCode, wParam, uintptr(lParam))
 	return r1
+}
+
+func (m *MouseHookManager) noteEvent() {
+	tick, _, _ := procGetTickCount64.Call()
+	if tick != 0 {
+		m.lastEventTick.Store(uint64(tick))
+	}
+}
+
+// startWatchdogLocked spawns the liveness watchdog. The caller holds m.mu only
+// for the duration of startLocked, so the goroutine must not touch m.mu while
+// waiting; it calls rebuildFromWatchdog which re-acquires it.
+func (m *MouseHookManager) startWatchdogLocked() {
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	m.watchdogStop = stop
+	m.watchdogDone = done
+	m.noteEvent()
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(mouseHookWatchdogTick)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				if !m.hookLooksDead() {
+					continue
+				}
+				m.rebuildFromWatchdog()
+			}
+		}
+	}()
+}
+
+func (m *MouseHookManager) stopWatchdogLocked() {
+	if m.watchdogStop != nil {
+		close(m.watchdogStop)
+		select {
+		case <-m.watchdogDone:
+		case <-time.After(mouseHookStopTimeout):
+		}
+	}
+	m.watchdogStop = nil
+	m.watchdogDone = nil
+}
+
+// hookLooksDead reports true when the system has seen input recently but our
+// low-level hook has not been called for longer than mouseHookEventTimeout.
+func (m *MouseHookManager) hookLooksDead() bool {
+	if m.hhook.Load() == 0 {
+		return m.activeTrigger.Load() != triggerCodeNone
+	}
+	var li lastInputInfo
+	li.CbSize = uint32(unsafe.Sizeof(li))
+	ok, _, _ := procGetLastInputInfoRef.Call(uintptr(unsafe.Pointer(&li)))
+	if ok == 0 {
+		return false
+	}
+	tick, _, _ := procGetTickCount64.Call()
+	if tick == 0 {
+		return false
+	}
+	const recentInput = 2500
+	if uint64(tick)-uint64(li.Time) > recentInput {
+		return false // nobody is using the mouse, nothing to judge
+	}
+	last := m.lastEventTick.Load()
+	if last == 0 {
+		return true
+	}
+	return uint64(tick)-last > uint64(mouseHookEventTimeout/time.Millisecond)
+}
+
+func (m *MouseHookManager) rebuildFromWatchdog() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.running || m.activeTrigger.Load() == triggerCodeNone {
+		return
+	}
+	m.stopLocked()
+	if err := m.startLocked(); err == nil {
+		m.rehookCount.Add(1)
+	}
 }
 
 func (m *MouseHookManager) notifyTrigger() {

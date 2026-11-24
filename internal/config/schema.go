@@ -13,6 +13,24 @@ import (
 const (
 	DefaultHotkey       = "Alt+G"
 	DefaultMouseTrigger = "none"
+
+	// ClickModeDouble launches an item on double click, ClickModeSingle on a single click.
+	ClickModeDouble = "double"
+	ClickModeSingle = "single"
+
+	ThemeDark   = "dark"
+	ThemeLight  = "light"
+	ThemeSystem = "system"
+
+	LanguageChinese = "zh"
+	LanguageEnglish = "en"
+
+	DefaultWindowWidth  = 960
+	DefaultWindowHeight = 640
+
+	MinWindowOpacity = 50
+	MinFontScale     = 80
+	MaxFontScale     = 140
 )
 
 var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
@@ -23,13 +41,39 @@ type Config struct {
 	Groups   []Group  `json:"groups"`
 }
 
-// Settings holds global hotkey, mouse trigger, and window visibility options.
+// Settings holds global hotkey, mouse trigger, launch, and window options.
 type Settings struct {
 	Hotkey       string `json:"hotkey"`
 	MouseTrigger string `json:"mouse_trigger"`
-	HideOnLaunch bool   `json:"hide_on_launch"`
-	HideOnBlur   bool   `json:"hide_on_blur"`
-	HideOnEsc    bool   `json:"hide_on_esc"`
+	// MouseSwallow hides the trigger mouse button from other applications while the
+	// trigger is a mouse button.
+	MouseSwallow bool `json:"mouse_swallow"`
+
+	HideOnLaunch bool `json:"hide_on_launch"`
+	HideOnBlur   bool `json:"hide_on_blur"`
+	HideOnEsc    bool `json:"hide_on_esc"`
+
+	// ClickMode decides whether a single or a double click launches an item.
+	ClickMode string `json:"click_mode"`
+
+	// AutoStart registers the executable under HKCU Run for the current user.
+	AutoStart bool `json:"auto_start"`
+	// StartHidden keeps the window closed on startup; the hotkey still summons it.
+	StartHidden bool `json:"start_hidden"`
+
+	Theme  string `json:"theme"`
+	Lang   string `json:"language"`
+	Recent bool   `json:"show_recent"`
+
+	// WindowOpacity is a percentage, WindowWidth and WindowHeight are device independent
+	// pixels with 0 meaning the default size. WindowX and WindowY are the last window
+	// position, with 0,0 meaning "let the application choose".
+	WindowOpacity int `json:"window_opacity"`
+	WindowWidth   int `json:"window_width"`
+	WindowHeight  int `json:"window_height"`
+	WindowX       int `json:"window_x"`
+	WindowY       int `json:"window_y"`
+	FontScale     int `json:"font_scale"`
 }
 
 // Group represents a named category of launcher items.
@@ -47,17 +91,26 @@ type Item struct {
 	Args    string `json:"args"`
 	WorkDir string `json:"work_dir"`
 	Icon    string `json:"icon"`
+	// Admin launches the target elevated through UAC.
+	Admin bool `json:"admin"`
 }
 
 // DefaultConfig returns a fresh default configuration.
 func DefaultConfig() Config {
 	return Config{
 		Settings: Settings{
-			Hotkey:       DefaultHotkey,
-			MouseTrigger: DefaultMouseTrigger,
-			HideOnLaunch: true,
-			HideOnBlur:   true,
-			HideOnEsc:    true,
+			Hotkey:        DefaultHotkey,
+			MouseTrigger:  DefaultMouseTrigger,
+			MouseSwallow:  true,
+			HideOnLaunch:  true,
+			HideOnBlur:    true,
+			HideOnEsc:     true,
+			ClickMode:     ClickModeDouble,
+			Theme:         ThemeDark,
+			Lang:          LanguageChinese,
+			Recent:        true,
+			WindowOpacity: 100,
+			FontScale:     100,
 		},
 		Groups: []Group{
 			{
@@ -90,6 +143,62 @@ func Normalize(cfg *Config) {
 		cfg.Settings.MouseTrigger = "xbutton2"
 	default:
 		cfg.Settings.MouseTrigger = DefaultMouseTrigger
+	}
+
+	switch strings.ToLower(strings.TrimSpace(cfg.Settings.ClickMode)) {
+	case ClickModeSingle:
+		cfg.Settings.ClickMode = ClickModeSingle
+	default:
+		cfg.Settings.ClickMode = ClickModeDouble
+	}
+
+	switch strings.ToLower(strings.TrimSpace(cfg.Settings.Theme)) {
+	case ThemeLight:
+		cfg.Settings.Theme = ThemeLight
+	case ThemeSystem:
+		cfg.Settings.Theme = ThemeSystem
+	default:
+		cfg.Settings.Theme = ThemeDark
+	}
+
+	switch strings.ToLower(strings.TrimSpace(cfg.Settings.Lang)) {
+	case LanguageEnglish:
+		cfg.Settings.Lang = LanguageEnglish
+	default:
+		cfg.Settings.Lang = LanguageChinese
+	}
+
+	if cfg.Settings.WindowOpacity == 0 {
+		cfg.Settings.WindowOpacity = 100
+	}
+	if cfg.Settings.WindowOpacity < MinWindowOpacity {
+		cfg.Settings.WindowOpacity = MinWindowOpacity
+	}
+	if cfg.Settings.WindowOpacity > 100 {
+		cfg.Settings.WindowOpacity = 100
+	}
+
+	if cfg.Settings.FontScale == 0 {
+		cfg.Settings.FontScale = 100
+	}
+	if cfg.Settings.FontScale < MinFontScale {
+		cfg.Settings.FontScale = MinFontScale
+	}
+	if cfg.Settings.FontScale > MaxFontScale {
+		cfg.Settings.FontScale = MaxFontScale
+	}
+
+	if cfg.Settings.WindowWidth <= 0 {
+		cfg.Settings.WindowWidth = 0
+	}
+	if cfg.Settings.WindowHeight <= 0 {
+		cfg.Settings.WindowHeight = 0
+	}
+	if cfg.Settings.WindowX < 0 {
+		cfg.Settings.WindowX = 0
+	}
+	if cfg.Settings.WindowY < 0 {
+		cfg.Settings.WindowY = 0
 	}
 
 	if cfg.Groups == nil {
@@ -190,7 +299,13 @@ func LooksLikeConfig(path string) bool {
 	return hasSettings || hasGroups
 }
 
-// Save normalizes a copy of cfg and writes it atomically to path.
+// BackupPath returns the path of the single rolling backup kept next to path.
+func BackupPath(path string) string {
+	return path + ".bak"
+}
+
+// Save normalizes a copy of cfg and writes it atomically to path. The previous contents are kept
+// as path + ".bak" so a damaged file can be recovered by hand.
 func Save(path string, cfg Config) error {
 	next := Clone(cfg)
 	Normalize(&next)
@@ -205,6 +320,8 @@ func Save(path string, cfg Config) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create config directory %q: %w", dir, err)
 	}
+
+	backupExisting(path)
 
 	tmp, err := os.CreateTemp(dir, ".config-*.tmp")
 	if err != nil {
@@ -231,4 +348,14 @@ func Save(path string, cfg Config) error {
 	}
 	cleanup = false
 	return nil
+}
+
+// backupExisting copies the current config file to path + ".bak". It is best effort: a failed
+// backup must never block saving the new configuration.
+func backupExisting(path string) {
+	data, err := os.ReadFile(path)
+	if err != nil || isBlank(data) {
+		return
+	}
+	_ = os.WriteFile(BackupPath(path), data, 0o644)
 }

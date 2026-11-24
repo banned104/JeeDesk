@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,21 +20,16 @@ import (
 	"jeedesk/internal/tray"
 )
 
-func newTestApp(t *testing.T) (*App, *atomic.Int32) {
+func newTestApp(t *testing.T) *App {
 	t.Helper()
 	dir := t.TempDir()
 	app := NewApp(dir)
-
-	var alertCount atomic.Int32
-	app.alertFunc = func(_, _ string) {
-		alertCount.Add(1)
-	}
 
 	mgr, err := config.NewManagerWithFallback(app.configPath, app.onConfigUpdated, app.onConfigError)
 	if err != nil {
 		t.Fatalf("NewManagerWithFallback failed: %v", err)
 	}
-	app.cfgMgr = mgr
+	app.setConfigManager(mgr)
 	t.Cleanup(func() {
 		_ = mgr.Close()
 	})
@@ -44,11 +38,11 @@ func newTestApp(t *testing.T) (*App, *atomic.Int32) {
 	if len(cfg.Groups) > 0 {
 		app.SetActiveGroup(cfg.Groups[0].ID)
 	}
-	return app, &alertCount
+	return app
 }
 
 func TestAppGroupAndItemLifecycle(t *testing.T) {
-	app, _ := newTestApp(t)
+	app := newTestApp(t)
 
 	devGroupID, err := app.AddGroup("开发工具")
 	if err != nil {
@@ -124,7 +118,7 @@ func TestAppGroupAndItemLifecycle(t *testing.T) {
 }
 
 func TestAppSaveSettingsValidation(t *testing.T) {
-	app, _ := newTestApp(t)
+	app := newTestApp(t)
 
 	if err := app.SaveSettings(config.Settings{
 		Hotkey:       "NotAKey+???",
@@ -156,8 +150,8 @@ func TestAppSaveSettingsValidation(t *testing.T) {
 }
 
 func TestAppBrokenConfigResilienceAndHotReload(t *testing.T) {
-	app, alertCount := newTestApp(t)
-	if err := app.cfgMgr.StartWatching(); err != nil {
+	app := newTestApp(t)
+	if err := app.configManager().StartWatching(); err != nil {
 		t.Fatalf("StartWatching failed: %v", err)
 	}
 
@@ -171,11 +165,11 @@ func TestAppBrokenConfigResilienceAndHotReload(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
-	for alertCount.Load() == 0 && time.Now().Before(deadline) {
+	for app.GetConfigError() == "" && time.Now().Before(deadline) {
 		time.Sleep(50 * time.Millisecond)
 	}
-	if alertCount.Load() == 0 {
-		t.Fatal("expected error alert to trigger on malformed config.json")
+	if app.GetConfigError() == "" {
+		t.Fatal("expected the config error to be reported on malformed config.json")
 	}
 
 	// Last valid config must still be intact in memory.
@@ -274,7 +268,7 @@ func TestIconMiddlewareSecurityAndServing(t *testing.T) {
 
 func newBlurTestApp(t *testing.T) *App {
 	t.Helper()
-	app, _ := newTestApp(t)
+	app := newTestApp(t)
 	app.stateMu.Lock()
 	app.visible = true
 	app.lastShown = time.Now().Add(-2 * blurGracePeriod)
@@ -424,7 +418,7 @@ func TestToggleWindowVisibilityAndForeground(t *testing.T) {
 }
 
 func TestHideOnEscDefaultAndPersistence(t *testing.T) {
-	app, _ := newTestApp(t)
+	app := newTestApp(t)
 
 	initial := app.GetConfig().Settings
 	if !initial.HideOnEsc {
@@ -515,13 +509,13 @@ func TestSingleInstanceLockAndWake(t *testing.T) {
 }
 
 func TestAppWritesRefusedWhileConfigBroken(t *testing.T) {
-	app, _ := newTestApp(t)
+	app := newTestApp(t)
 
 	broken := []byte(`{"settings": { "hotkey": "Ctrl+K"`)
 	if err := os.WriteFile(app.configPath, broken, 0o644); err != nil {
 		t.Fatalf("write broken config: %v", err)
 	}
-	if _, err := app.cfgMgr.Reload(); err == nil {
+	if _, err := app.configManager().Reload(); err == nil {
 		t.Fatal("expected Reload to fail on broken config")
 	}
 
@@ -542,7 +536,7 @@ func TestAppWritesRefusedWhileConfigBroken(t *testing.T) {
 	if err := config.Save(app.configPath, config.DefaultConfig()); err != nil {
 		t.Fatalf("repair config: %v", err)
 	}
-	if _, err := app.cfgMgr.Reload(); err != nil {
+	if _, err := app.configManager().Reload(); err != nil {
 		t.Fatalf("reload repaired config: %v", err)
 	}
 	if _, err := app.AddGroup("修复后写入"); err != nil {
@@ -650,7 +644,7 @@ const (
 
 func newHotkeyTestApp(t *testing.T) (*App, *hook.HotkeyManager, *[]string) {
 	t.Helper()
-	app, _ := newTestApp(t)
+	app := newTestApp(t)
 	mgr := hook.NewHotkeyManager(func() {})
 	t.Cleanup(mgr.Stop)
 	app.hotkeyMgr = mgr
@@ -727,7 +721,7 @@ func TestManualReloadRetriesUnregisteredHotkey(t *testing.T) {
 }
 
 func TestContextAccessIsSynchronised(t *testing.T) {
-	app, _ := newTestApp(t)
+	app := newTestApp(t)
 	if got := app.context(); got != nil {
 		t.Fatalf("context before startup = %v, want nil", got)
 	}
@@ -764,9 +758,9 @@ func TestLoadConfigKeepsManagerUsableWhenConfigBroken(t *testing.T) {
 	// This is the startup sequence from main: the config is loaded before the app runs.
 	app := NewApp(dir)
 	app.loadConfig()
-	t.Cleanup(func() { _ = app.cfgMgr.Close() })
+	t.Cleanup(func() { _ = app.configManager().Close() })
 
-	if app.cfgMgr == nil {
+	if app.configManager() == nil {
 		t.Fatal("expected a usable manager despite the load error")
 	}
 	if app.configLoadErr == nil {

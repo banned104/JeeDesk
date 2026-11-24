@@ -226,3 +226,86 @@ func showWarningMessageBox(title, message string) {
 		uintptr(mbOK|mbIconWarning|mbTopMost),
 	)
 }
+
+var (
+	procMonitorFromWindow = modUser32.NewProc("MonitorFromWindow")
+	procGetMonitorInfoW   = modUser32.NewProc("GetMonitorInfoW")
+	procGetCursorPosW     = procGetCursorPos
+)
+
+const (
+	monitorDefaultToNearest = 0x00000002
+	swpNoZOrder             = 0x0004
+	swpNoActivate           = 0x0010
+)
+
+type winMONITORINFO struct {
+	cbSize    uint32
+	rcMonitor winRECT
+	rcWork    winRECT
+	dwFlags   uint32
+}
+
+// windowRectOf reports the window's screen rectangle.
+func windowRectOf(hwnd uintptr) (winRECT, bool) {
+	if hwnd == 0 {
+		return winRECT{}, false
+	}
+	var rect winRECT
+	if r, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&rect))); r == 0 {
+		return winRECT{}, false
+	}
+	return rect, true
+}
+
+// workAreaOf reports the desktop area of the monitor the window is on, excluding the taskbar.
+func workAreaOf(hwnd uintptr) (winRECT, bool) {
+	monitor, _, _ := procMonitorFromWindow.Call(hwnd, monitorDefaultToNearest)
+	if monitor == 0 {
+		return winRECT{}, false
+	}
+	info := winMONITORINFO{cbSize: uint32(unsafe.Sizeof(winMONITORINFO{}))}
+	if r, _, _ := procGetMonitorInfoW.Call(monitor, uintptr(unsafe.Pointer(&info))); r == 0 {
+		return winRECT{}, false
+	}
+	return info.rcWork, true
+}
+
+// moveWindowTo moves the window without resizing or changing its z-order.
+func moveWindowTo(hwnd uintptr, x, y int32) {
+	if hwnd == 0 {
+		return
+	}
+	procSetWindowPos.Call(hwnd, 0, uintptr(x), uintptr(y), 0, 0, swpNoSize|swpNoZOrder|swpNoActivate)
+}
+
+// ensureWindowReachable moves a window that ended up entirely outside every monitor back into
+// the work area, which happens when a display was unplugged or the resolution changed.
+func ensureWindowReachable(hwnd uintptr) {
+	rect, ok := windowRectOf(hwnd)
+	if !ok {
+		return
+	}
+	work, ok := workAreaOf(hwnd)
+	if !ok {
+		return
+	}
+	overlaps := rect.Right > work.Left && rect.Left < work.Right && rect.Bottom > work.Top && rect.Top < work.Bottom
+	if overlaps {
+		return
+	}
+	width := rect.Right - rect.Left
+	height := rect.Bottom - rect.Top
+	x := work.Left + (work.Right-work.Left-width)/2
+	y := work.Top + (work.Bottom-work.Top-height)/2
+	moveWindowTo(hwnd, x, y)
+}
+
+// cursorPosition reports the current mouse position in screen coordinates.
+func cursorPosition() (int32, int32, bool) {
+	var point winPOINT
+	if r, _, _ := procGetCursorPosW.Call(uintptr(unsafe.Pointer(&point))); r == 0 {
+		return 0, 0, false
+	}
+	return point.X, point.Y, true
+}

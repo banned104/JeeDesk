@@ -20,11 +20,15 @@ import (
 	"jeedesk/internal/launcher"
 	"jeedesk/internal/resolver"
 	"jeedesk/internal/tray"
+	"jeedesk/internal/usage"
 )
 
 const (
 	blurGracePeriod     = 400 * time.Millisecond
 	blurMonitorInterval = 80 * time.Millisecond
+	windowSaveDelay     = 600 * time.Millisecond
+	appVersion          = "1.0.0"
+	recentItemsLimit    = 12
 )
 
 type toastPayload struct {
@@ -49,12 +53,21 @@ type App struct {
 	configPath string
 	iconsDir   string
 
-	// cfgMgr and configLoadErr are set by loadConfig before any other goroutine exists.
+	// cfgMu guards cfgMgr, which ReloadConfig may replace while bound methods read it.
+	cfgMu         sync.RWMutex
 	cfgMgr        *config.Manager
 	configLoadErr error
 
-	hotkeyMgr *hook.HotkeyManager
-	mouseMgr  *hook.MouseHookManager
+	// usageStore counts launches for the recent list; nil when it could not be created.
+	usageStore *usage.Store
+
+	// undoMu guards the snapshots used by UndoDeleteItem and UndoDeleteGroup.
+	undoMu       sync.Mutex
+	deletedItem  *deletedItemSnapshot
+	deletedGroup *deletedGroupSnapshot
+
+	windowSaveMu    sync.Mutex
+	windowSaveTimer *time.Timer
 
 	activeGroupMu sync.RWMutex
 	activeGroupID string
@@ -70,6 +83,8 @@ type App struct {
 	blurStopCh chan struct{}
 
 	hookMu        sync.Mutex
+	hotkeyMgr     *hook.HotkeyManager
+	mouseMgr      *hook.MouseHookManager
 	appliedHotkey string
 	appliedMouse  string
 	hotkeyStatus  HotkeyStatus
@@ -78,7 +93,6 @@ type App struct {
 	lastConfigErr string
 	startupNotice string
 
-	alertFunc       func(title, message string)
 	toastFunc       func(level, message string)
 	findMainHwndFn  func() uintptr
 	isVisibleFn     func(uintptr) bool
@@ -95,7 +109,6 @@ func NewApp(baseDir string) *App {
 		baseDir:         cleaned,
 		configPath:      filepath.Join(cleaned, "config.json"),
 		iconsDir:        filepath.Join(cleaned, "icons"),
-		alertFunc:       showWarningMessageBox,
 		findMainHwndFn:  findMainWailsWindow,
 		isVisibleFn:     isWindowVisible,
 		isProcessFgFn:   isProcessForeground,
@@ -105,12 +118,43 @@ func NewApp(baseDir string) *App {
 	}
 }
 
-// loadConfig creates the config manager before any other goroutine exists, so cfgMgr never needs
-// synchronising. A load failure is kept for startup to report.
+// loadConfig creates the config manager before any other goroutine exists, so the initial load needs
+// no locking beyond the cfgMu write below. A load failure is kept for startup to report.
 func (a *App) loadConfig() {
 	mgr, err := config.NewManagerWithFallback(a.configPath, a.onConfigUpdated, a.onConfigError)
+	a.cfgMu.Lock()
 	a.cfgMgr = mgr
+	a.cfgMu.Unlock()
 	a.configLoadErr = err
+
+	a.usageStore = usage.NewStore(filepath.Join(a.baseDir, "usage.json"))
+}
+
+// configManager returns the current config manager, or nil before loadConfig ran.
+func (a *App) configManager() *config.Manager {
+	a.cfgMu.RLock()
+	defer a.cfgMu.RUnlock()
+	return a.cfgMgr
+}
+
+func (a *App) setConfigManager(mgr *config.Manager) {
+	a.cfgMu.Lock()
+	a.cfgMgr = mgr
+	a.cfgMu.Unlock()
+}
+
+// hooks returns the hook managers, both nil before startup created them.
+func (a *App) hooks() (*hook.HotkeyManager, *hook.MouseHookManager) {
+	a.hookMu.Lock()
+	defer a.hookMu.Unlock()
+	return a.hotkeyMgr, a.mouseMgr
+}
+
+func (a *App) setHooks(hotkeyMgr *hook.HotkeyManager, mouseMgr *hook.MouseHookManager) {
+	a.hookMu.Lock()
+	a.hotkeyMgr = hotkeyMgr
+	a.mouseMgr = mouseMgr
+	a.hookMu.Unlock()
 }
 
 func (a *App) setContext(ctx context.Context) {
@@ -139,14 +183,16 @@ func (a *App) startup(ctx context.Context) {
 		a.SetActiveGroup(initialCfg.Groups[0].ID)
 	}
 
-	if a.cfgMgr != nil {
-		if err := a.cfgMgr.StartWatching(); err != nil {
-			log.Printf("[config] watch failed: %v", err)
-		}
-	}
+	// Hooks exist before the watcher starts: a config reload arriving while the managers were
+	// still nil used to drop the change without any trace.
+	hotkeyMgr := hook.NewHotkeyManager(a.ToggleWindow)
+	mouseMgr := hook.NewMouseHookManager(a.ToggleWindow)
+	a.setHooks(hotkeyMgr, mouseMgr)
 
-	a.hotkeyMgr = hook.NewHotkeyManager(a.ToggleWindow)
-	if err := a.hotkeyMgr.Start(initialCfg.Settings.Hotkey); err != nil {
+	a.pruneUsage(initialCfg)
+	a.syncAutostart(initialCfg)
+
+	if err := hotkeyMgr.Start(initialCfg.Settings.Hotkey); err != nil {
 		log.Printf("[hook] failed to register hotkey %q: %v", initialCfg.Settings.Hotkey, err)
 		status := HotkeyStatus{
 			Hotkey:     initialCfg.Settings.Hotkey,
@@ -171,13 +217,20 @@ func (a *App) startup(ctx context.Context) {
 		a.emitEvent("hotkey:status", status)
 	}
 
-	a.mouseMgr = hook.NewMouseHookManager(a.ToggleWindow)
-	if err := a.mouseMgr.Update(initialCfg.Settings.MouseTrigger); err != nil {
+	mouseMgr.SetSwallowInput(initialCfg.Settings.MouseSwallow)
+	if err := mouseMgr.Update(initialCfg.Settings.MouseTrigger); err != nil {
 		log.Printf("[hook] failed to set mouse trigger %q: %v", initialCfg.Settings.MouseTrigger, err)
 	} else {
 		a.hookMu.Lock()
 		a.appliedMouse = initialCfg.Settings.MouseTrigger
 		a.hookMu.Unlock()
+	}
+
+	// Start watching only now: the watcher may deliver settings that need both hook managers.
+	if mgr := a.configManager(); mgr != nil {
+		if err := mgr.StartWatching(); err != nil {
+			log.Printf("[config] watch failed: %v", err)
+		}
 	}
 
 	runtime.OnFileDrop(ctx, func(_ int, _ int, paths []string) {
@@ -230,11 +283,15 @@ func (a *App) domReady(_ context.Context) {
 	}
 	a.emitEvent("hotkey:status", a.GetHotkeyStatus())
 
-	a.stateMu.Lock()
-	a.visible = true
-	a.lastShown = time.Now()
-	a.stateMu.Unlock()
-	a.startBlurMonitor()
+	// With start_hidden the window stays closed until the hotkey or the tray opens it, so it must
+	// not be marked visible here or the blur monitor would treat it as an open window.
+	if !a.GetConfig().Settings.StartHidden {
+		a.stateMu.Lock()
+		a.visible = true
+		a.lastShown = time.Now()
+		a.stateMu.Unlock()
+		a.startBlurMonitor()
+	}
 
 	go func() {
 		if a.findMainHwndFn != nil {
@@ -258,15 +315,21 @@ func (a *App) beforeClose(_ context.Context) (prevent bool) {
 
 func (a *App) shutdown(_ context.Context) {
 	a.stopBlurMonitor()
-	if a.hotkeyMgr != nil {
-		a.hotkeyMgr.Stop()
+
+	hotkeyMgr, mouseMgr := a.hooks()
+	if hotkeyMgr != nil {
+		hotkeyMgr.Stop()
 	}
-	if a.mouseMgr != nil {
-		a.mouseMgr.Stop()
+	if mouseMgr != nil {
+		mouseMgr.Stop()
 	}
-	if a.cfgMgr != nil {
-		_ = a.cfgMgr.Close()
+	if mgr := a.configManager(); mgr != nil {
+		_ = mgr.Close()
 	}
+	if a.usageStore != nil {
+		_ = a.usageStore.Close()
+	}
+	a.flushWindowState()
 	tray.Stop()
 }
 
@@ -320,6 +383,7 @@ func (a *App) onConfigUpdated(cfg config.Config) {
 
 	a.syncHooks(cfg.Settings, false)
 	a.ensureValidActiveGroup(cfg)
+	a.pruneUsage(cfg)
 	a.emitEvent("config:updated", cfg)
 }
 
@@ -332,13 +396,8 @@ func (a *App) onConfigError(err error) {
 	a.emitEvent("config:error", msg)
 
 	a.errMu.Lock()
-	duplicate := a.lastConfigErr == msg
 	a.lastConfigErr = msg
 	a.errMu.Unlock()
-
-	if !duplicate && a.alertFunc != nil {
-		go a.alertFunc("JeeDesk 配置文件错误", fmt.Sprintf("config.json 无法读取或解析。\n修复之前 JeeDesk 不会写入该文件，原内容保持不变：\n\n%s", msg))
-	}
 }
 
 // applyHotkey switches the global hotkey to spec and records what the hook holds afterwards: a
@@ -346,10 +405,11 @@ func (a *App) onConfigError(err error) {
 // Otherwise a failure that has already been reported is not reported again, which keeps a config
 // reload echoing a saved change from repeating the same message.
 func (a *App) applyHotkey(spec string, explicit bool) {
-	if a.hotkeyMgr == nil {
+	hotkeyMgr, _ := a.hooks()
+	if hotkeyMgr == nil {
 		return
 	}
-	err := a.hotkeyMgr.Update(spec)
+	err := hotkeyMgr.Update(spec)
 	status := HotkeyStatus{Hotkey: spec}
 	if err != nil {
 		log.Printf("[hook] hotkey update failed (%q): %v", spec, err)
@@ -360,7 +420,7 @@ func (a *App) applyHotkey(spec string, explicit bool) {
 
 	a.hookMu.Lock()
 	prev := a.hotkeyStatus
-	a.appliedHotkey = a.hotkeyMgr.ActiveSpec()
+	a.appliedHotkey = hotkeyMgr.ActiveSpec()
 	a.hotkeyStatus = status
 	a.hookMu.Unlock()
 	a.emitEvent("hotkey:status", status)
@@ -388,7 +448,9 @@ func (a *App) syncHooks(settings config.Settings, explicit bool) {
 	prevMouse := a.appliedMouse
 	a.hookMu.Unlock()
 
-	if a.hotkeyMgr != nil {
+	hotkeyMgr, mouseMgr := a.hooks()
+
+	if hotkeyMgr != nil {
 		switch {
 		case settings.Hotkey != prevHotkey:
 			a.applyHotkey(settings.Hotkey, explicit)
@@ -399,8 +461,12 @@ func (a *App) syncHooks(settings config.Settings, explicit bool) {
 		}
 	}
 
-	if a.mouseMgr != nil && settings.MouseTrigger != prevMouse {
-		if err := a.mouseMgr.Update(settings.MouseTrigger); err != nil {
+	if mouseMgr == nil {
+		return
+	}
+	mouseMgr.SetSwallowInput(settings.MouseSwallow)
+	if settings.MouseTrigger != prevMouse {
+		if err := mouseMgr.Update(settings.MouseTrigger); err != nil {
 			log.Printf("[hook] mouse trigger update failed (%q): %v", settings.MouseTrigger, err)
 			a.emitToast("error", fmt.Sprintf("鼠标呼出设置失败: %v", err))
 		} else {
@@ -536,6 +602,7 @@ func (a *App) ShowWindow() {
 	}
 	runtime.WindowShow(ctx)
 	a.startBlurMonitor()
+	a.emitEvent("window:shown", nil)
 
 	go func() {
 		a.focusMainWindow()
@@ -596,10 +663,10 @@ func (a *App) GetHotkeyStatus() HotkeyStatus {
 
 // GetConfig returns the current valid configuration.
 func (a *App) GetConfig() config.Config {
-	if a.cfgMgr == nil {
+	if a.configManager() == nil {
 		return config.DefaultConfig()
 	}
-	return a.cfgMgr.Get()
+	return a.configManager().Get()
 }
 
 // SetActiveGroup tracks the currently selected group ID for native file drops.
@@ -616,9 +683,17 @@ func (a *App) LaunchItem(groupID string, itemID string) error {
 	if !found {
 		return fmt.Errorf("未找到目标项目 (%s/%s)", groupID, itemID)
 	}
-	if err := launcher.Launch(item.Path, item.Args, item.WorkDir); err != nil {
-		return err
+	launchErr := launcher.Launch(item.Path, item.Args, item.WorkDir)
+	if item.Admin {
+		launchErr = launcher.LaunchElevated(item.Path, item.Args, item.WorkDir)
 	}
+	if launchErr != nil {
+		// A cancelled UAC prompt is not a failure worth a toast, but it must not count as a
+		// launch either, otherwise the recent list fills with items the user never started.
+		return launchErr
+	}
+
+	a.recordLaunch(groupID, item.ID)
 	if cfg.Settings.HideOnLaunch {
 		a.HideWindow()
 	}
@@ -628,7 +703,7 @@ func (a *App) LaunchItem(groupID string, itemID string) error {
 // AddDroppedFiles resolves dropped file/folder/.lnk paths, extracts & caches icons,
 // and appends the new items into the specified group via config.json.
 func (a *App) AddDroppedFiles(groupID string, paths []string) error {
-	if a.cfgMgr == nil {
+	if a.configManager() == nil {
 		return errors.New("配置管理器尚未就绪")
 	}
 	if len(paths) == 0 {
@@ -675,7 +750,7 @@ func (a *App) AddDroppedFiles(groupID string, paths []string) error {
 		return errors.New("未能解析任何有效文件")
 	}
 
-	err := a.cfgMgr.Update(func(cfg *config.Config) error {
+	err := a.configManager().Update(func(cfg *config.Config) error {
 		if len(cfg.Groups) == 0 {
 			cfg.Groups = append(cfg.Groups, config.Group{
 				ID:    "default",
@@ -704,7 +779,7 @@ func (a *App) AddDroppedFiles(groupID string, paths []string) error {
 
 // AddItem manually adds a single item to groupID, auto-extracting an icon if empty.
 func (a *App) AddItem(groupID string, item config.Item) error {
-	if a.cfgMgr == nil {
+	if a.configManager() == nil {
 		return errors.New("配置管理器尚未就绪")
 	}
 	item.Name = strings.TrimSpace(item.Name)
@@ -742,7 +817,7 @@ func (a *App) AddItem(groupID string, item config.Item) error {
 		}
 	}
 
-	return a.cfgMgr.Update(func(cfg *config.Config) error {
+	return a.configManager().Update(func(cfg *config.Config) error {
 		idx := findGroupIndex(cfg.Groups, groupID)
 		if idx < 0 {
 			return fmt.Errorf("未找到分组 %q", groupID)
@@ -754,7 +829,7 @@ func (a *App) AddItem(groupID string, item config.Item) error {
 
 // UpdateItem updates an existing item's metadata inside groupID.
 func (a *App) UpdateItem(groupID string, item config.Item) error {
-	if a.cfgMgr == nil {
+	if a.configManager() == nil {
 		return errors.New("配置管理器尚未就绪")
 	}
 	item.Name = strings.TrimSpace(item.Name)
@@ -778,7 +853,7 @@ func (a *App) UpdateItem(groupID string, item config.Item) error {
 		}
 	}
 
-	return a.cfgMgr.Update(func(cfg *config.Config) error {
+	return a.configManager().Update(func(cfg *config.Config) error {
 		gIdx := findGroupIndex(cfg.Groups, groupID)
 		if gIdx < 0 {
 			return fmt.Errorf("未找到分组 %q", groupID)
@@ -793,12 +868,15 @@ func (a *App) UpdateItem(groupID string, item config.Item) error {
 	})
 }
 
-// DeleteItem removes an item from groupID.
+// DeleteItem removes an item from groupID. The removed item is remembered for UndoDeleteItem.
 func (a *App) DeleteItem(groupID string, itemID string) error {
-	if a.cfgMgr == nil {
+	if a.configManager() == nil {
 		return errors.New("配置管理器尚未就绪")
 	}
-	return a.cfgMgr.Update(func(cfg *config.Config) error {
+
+	snapshot := a.itemSnapshot(groupID, itemID)
+
+	err := a.configManager().Update(func(cfg *config.Config) error {
 		gIdx := findGroupIndex(cfg.Groups, groupID)
 		if gIdx < 0 {
 			return fmt.Errorf("未找到分组 %q", groupID)
@@ -812,6 +890,20 @@ func (a *App) DeleteItem(groupID string, itemID string) error {
 		}
 		return fmt.Errorf("未找到项目 %q", itemID)
 	})
+	if err != nil {
+		return err
+	}
+
+	if a.usageStore != nil {
+		a.usageStore.Forget(groupID, itemID)
+	}
+	if snapshot != nil {
+		a.undoMu.Lock()
+		a.deletedItem = snapshot
+		a.deletedGroup = nil
+		a.undoMu.Unlock()
+	}
+	return nil
 }
 
 // OpenItemLocation opens Windows Explorer and selects the target path.
@@ -821,7 +913,7 @@ func (a *App) OpenItemLocation(path string) error {
 
 // AddGroup appends a new group to config.json, makes it the active group, and returns its ID.
 func (a *App) AddGroup(name string) (string, error) {
-	if a.cfgMgr == nil {
+	if a.configManager() == nil {
 		return "", errors.New("配置管理器尚未就绪")
 	}
 	trimmed := strings.TrimSpace(name)
@@ -834,7 +926,7 @@ func (a *App) AddGroup(name string) (string, error) {
 		Name:  trimmed,
 		Items: []config.Item{},
 	}
-	if err := a.cfgMgr.Update(func(cfg *config.Config) error {
+	if err := a.configManager().Update(func(cfg *config.Config) error {
 		cfg.Groups = append(cfg.Groups, newGroup)
 		return nil
 	}); err != nil {
@@ -846,7 +938,7 @@ func (a *App) AddGroup(name string) (string, error) {
 
 // RenameGroup renames an existing group.
 func (a *App) RenameGroup(groupID string, name string) error {
-	if a.cfgMgr == nil {
+	if a.configManager() == nil {
 		return errors.New("配置管理器尚未就绪")
 	}
 	trimmed := strings.TrimSpace(name)
@@ -854,7 +946,7 @@ func (a *App) RenameGroup(groupID string, name string) error {
 		return errors.New("分组名称不能为空")
 	}
 
-	return a.cfgMgr.Update(func(cfg *config.Config) error {
+	return a.configManager().Update(func(cfg *config.Config) error {
 		idx := findGroupIndex(cfg.Groups, groupID)
 		if idx < 0 {
 			return fmt.Errorf("未找到分组 %q", groupID)
@@ -864,12 +956,15 @@ func (a *App) RenameGroup(groupID string, name string) error {
 	})
 }
 
-// DeleteGroup deletes a group by ID.
+// DeleteGroup deletes a group by ID. The group and its items are remembered for UndoDeleteGroup.
 func (a *App) DeleteGroup(groupID string) error {
-	if a.cfgMgr == nil {
+	if a.configManager() == nil {
 		return errors.New("配置管理器尚未就绪")
 	}
-	return a.cfgMgr.Update(func(cfg *config.Config) error {
+
+	snapshot := a.groupSnapshot(groupID)
+
+	err := a.configManager().Update(func(cfg *config.Config) error {
 		idx := findGroupIndex(cfg.Groups, groupID)
 		if idx < 0 {
 			return fmt.Errorf("未找到分组 %q", groupID)
@@ -877,29 +972,50 @@ func (a *App) DeleteGroup(groupID string) error {
 		cfg.Groups = append(cfg.Groups[:idx], cfg.Groups[idx+1:]...)
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	if a.usageStore != nil {
+		a.usageStore.ForgetGroup(groupID)
+	}
+	if snapshot != nil {
+		a.undoMu.Lock()
+		a.deletedGroup = snapshot
+		a.deletedItem = nil
+		a.undoMu.Unlock()
+	}
+	return nil
 }
 
 // SaveSettings validates and writes updated application settings to config.json.
 func (a *App) SaveSettings(settings config.Settings) error {
-	if a.cfgMgr == nil {
+	if a.configManager() == nil {
 		return errors.New("配置管理器尚未就绪")
 	}
 
 	settings.Hotkey = strings.TrimSpace(settings.Hotkey)
 	if settings.Hotkey == "" {
-		settings.Hotkey = "Alt+G"
+		settings.Hotkey = config.DefaultHotkey
 	}
 	if _, _, err := hook.ParseHotkey(settings.Hotkey); err != nil {
 		return fmt.Errorf("无效快捷键 %q: %w", settings.Hotkey, err)
 	}
 
+	// Validate what the user typed before defaulting, so a typo is reported instead of being
+	// silently replaced by a default.
 	mouseTrigger, err := hook.ValidateMouseTrigger(settings.MouseTrigger)
 	if err != nil {
 		return fmt.Errorf("无效鼠标触发设置: %w", err)
 	}
 	settings.MouseTrigger = mouseTrigger
 
-	if err := a.cfgMgr.Update(func(cfg *config.Config) error {
+	// Fill in and clamp every remaining field, including ones an older client does not send.
+	normalized := config.DefaultConfig()
+	normalized.Settings = settings
+	config.Normalize(&normalized)
+	settings = normalized.Settings
+
+	if err := a.configManager().Update(func(cfg *config.Config) error {
 		cfg.Settings = settings
 		return nil
 	}); err != nil {
@@ -907,6 +1023,9 @@ func (a *App) SaveSettings(settings config.Settings) error {
 	}
 
 	a.syncHooks(settings, true)
+	if err := applyAutoStart(settings.AutoStart); err != nil {
+		a.emitToast("warning", fmt.Sprintf("开机启动设置失败: %v", err))
+	}
 	a.emitToast("success", "设置已保存")
 	return nil
 }
@@ -914,15 +1033,15 @@ func (a *App) SaveSettings(settings config.Settings) error {
 // ReloadConfig forces an immediate reload of config.json. It is also how the user retries a hotkey
 // that failed to register, for example after the program holding it was closed.
 func (a *App) ReloadConfig() error {
-	if a.cfgMgr == nil {
-		mgr, err := config.NewManager(a.configPath, a.onConfigUpdated, a.onConfigError)
+	if mgr := a.configManager(); mgr == nil {
+		rebuilt, err := config.NewManager(a.configPath, a.onConfigUpdated, a.onConfigError)
 		if err != nil {
 			a.onConfigError(err)
 			return err
 		}
-		a.cfgMgr = mgr
-		_ = a.cfgMgr.StartWatching()
-		cfg := mgr.Get()
+		a.setConfigManager(rebuilt)
+		_ = rebuilt.StartWatching()
+		cfg := rebuilt.Get()
 		a.onConfigUpdated(cfg)
 		// The user asked for this reload, so a hotkey that still fails to register is reported.
 		a.syncHooks(cfg.Settings, true)
@@ -930,7 +1049,7 @@ func (a *App) ReloadConfig() error {
 		return nil
 	}
 
-	cfg, err := a.cfgMgr.Reload()
+	cfg, err := a.configManager().Reload()
 	if err != nil {
 		return err
 	}

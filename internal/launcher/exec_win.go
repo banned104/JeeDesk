@@ -26,6 +26,56 @@ func Launch(targetPath, args, workDir string) error {
 	return shellExecute("open", file, params, dir)
 }
 
+// ErrElevationCancelled reports that the user dismissed the UAC prompt.
+var ErrElevationCancelled = errors.New("已取消管理员授权")
+
+// LaunchElevated starts the target with the "runas" verb, which makes Windows show a UAC
+// prompt. A .lnk target is resolved first so elevation applies to the real program.
+func LaunchElevated(targetPath, args, workDir string) error {
+	file, params, dir, err := resolveLaunchParams(targetPath, args, workDir)
+	if err != nil {
+		return err
+	}
+
+	verb, err := windows.UTF16PtrFromString("runas")
+	if err != nil {
+		return err
+	}
+	filePtr, err := windows.UTF16PtrFromString(file)
+	if err != nil {
+		return fmt.Errorf("invalid target path: %w", err)
+	}
+	var paramsPtr *uint16
+	if params != "" {
+		if paramsPtr, err = windows.UTF16PtrFromString(params); err != nil {
+			return fmt.Errorf("invalid arguments: %w", err)
+		}
+	}
+	var dirPtr *uint16
+	if dir != "" {
+		if dirPtr, err = windows.UTF16PtrFromString(dir); err != nil {
+			return fmt.Errorf("invalid working directory: %w", err)
+		}
+	}
+
+	ret, _, _ := procShellExecuteW.Call(
+		0,
+		uintptr(unsafe.Pointer(verb)),
+		uintptr(unsafe.Pointer(filePtr)),
+		uintptr(unsafe.Pointer(paramsPtr)),
+		uintptr(unsafe.Pointer(dirPtr)),
+		uintptr(windows.SW_SHOWNORMAL),
+	)
+	// ShellExecuteW reports a dismissed UAC prompt as "access denied".
+	if ret == 5 {
+		return ErrElevationCancelled
+	}
+	if ret <= 32 {
+		return shellExecuteError(ret)
+	}
+	return nil
+}
+
 // OpenFolderAndSelect opens Windows Explorer and selects targetPath.
 func OpenFolderAndSelect(targetPath string) error {
 	args, err := resolveSelectArgs(targetPath)

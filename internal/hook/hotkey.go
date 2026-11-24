@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -30,6 +31,11 @@ const (
 	pmNoRemove     uintptr = 0x0000
 	wmUpdateHotkey uint32  = WM_APP + 1
 	hotkeyID       uintptr = 1
+
+	vkF13 uint32 = 0x7C // VK_F13
+	vkF24 uint32 = 0x87 // VK_F24
+
+	hotkeyStopTimeout = 2 * time.Second
 )
 
 var (
@@ -138,6 +144,15 @@ func ParseHotkey(spec string) (modifiers uint32, vk uint32, err error) {
 
 	if !hasKey {
 		return 0, 0, fmt.Errorf("missing main key in hotkey %q", spec)
+	}
+
+	// A global hotkey without a modifier would hijack that key for the whole
+	// system: typing "A" anywhere would open JeeDesk. Function keys F13-F24 do
+	// not exist on consumer keyboards, so they stay usable bare.
+	if modifiers&MOD_ALT == 0 && modifiers&MOD_CONTROL == 0 && modifiers&MOD_SHIFT == 0 && modifiers&MOD_WIN == 0 {
+		if !(vk >= vkF13 && vk <= vkF24) {
+			return 0, 0, fmt.Errorf("hotkey %q needs at least one of Ctrl/Alt/Shift/Win", spec)
+		}
 	}
 
 	modifiers |= MOD_NOREPEAT
@@ -408,7 +423,10 @@ func (h *HotkeyManager) Stop() {
 	}
 
 	_ = postThreadMessage(h.tid, WM_QUIT, 0, 0)
-	<-h.done
+	select {
+	case <-h.done:
+	case <-time.After(hotkeyStopTimeout):
+	}
 
 	h.started = false
 	h.tid = 0

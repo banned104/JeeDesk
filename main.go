@@ -21,11 +21,21 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+const (
+	minWindowWidth  = 580
+	minWindowHeight = 380
+)
+
 func main() {
 	baseDir := resolveBaseDir()
 	app := NewApp(baseDir)
 	// Load the config before anything can run concurrently with OnStartup.
 	app.loadConfig()
+
+	// The window is created once, so the saved size, theme, and start-hidden preference have to
+	// be read here rather than applied later from the frontend.
+	bootCfg := app.GetConfig()
+	width, height, startHidden, theme := bootWindowOptions(bootCfg.Settings)
 
 	si, isPrimary, err := AcquireSingleInstance(
 		singleInstanceMutexName,
@@ -44,12 +54,12 @@ func main() {
 
 	err = wails.Run(&options.App{
 		Title:            "JeeDesk",
-		Width:            800,
-		Height:           520,
-		MinWidth:         580,
-		MinHeight:        380,
+		Width:            width,
+		Height:           height,
+		MinWidth:         minWindowWidth,
+		MinHeight:        minWindowHeight,
 		Frameless:        true,
-		StartHidden:      false,
+		StartHidden:      startHidden,
 		AlwaysOnTop:      true,
 		BackgroundColour: &options.RGBA{R: 18, G: 22, B: 32, A: 0},
 		AssetServer: &assetserver.Options{
@@ -74,12 +84,36 @@ func main() {
 			WindowIsTranslucent:  true,
 			BackdropType:         windows.Acrylic,
 			DisableWindowIcon:    true,
-			Theme:                windows.Dark,
+			Theme:                theme,
 		},
 	})
 	if err != nil {
 		log.Fatalf("JeeDesk failed to start: %v", err)
 	}
+}
+
+// bootWindowOptions turns saved settings into the window options Wails needs at startup.
+// A saved size is reused only when it is large enough to stay usable, and a theme without an
+// explicit preference follows the Windows app theme.
+func bootWindowOptions(settings config.Settings) (width, height int, startHidden bool, theme windows.Theme) {
+	width, height = config.DefaultWindowWidth, config.DefaultWindowHeight
+	if settings.WindowWidth >= minWindowWidth {
+		width = settings.WindowWidth
+	}
+	if settings.WindowHeight >= minWindowHeight {
+		height = settings.WindowHeight
+	}
+
+	switch settings.Theme {
+	case config.ThemeLight:
+		theme = windows.Light
+	case config.ThemeSystem:
+		theme = windows.SystemDefault
+	default:
+		theme = windows.Dark
+	}
+
+	return width, height, settings.StartHidden, theme
 }
 
 // resolveBaseDir picks the directory that holds config.json and icons/.

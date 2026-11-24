@@ -24,23 +24,24 @@ const (
 
 	singleInstanceFindPollInterval = 30 * time.Millisecond
 	singleInstanceFindTimeout      = 1500 * time.Millisecond
+	singleInstanceCloseTimeout     = 2 * time.Second
 )
 
 var (
-	modKernel32                 = windows.NewLazySystemDLL("kernel32.dll")
-	procGetModuleHandleW        = modKernel32.NewProc("GetModuleHandleW")
-	procFindWindowExW           = modUser32.NewProc("FindWindowExW")
-	procAllowSetForegroundWin   = modUser32.NewProc("AllowSetForegroundWindow")
-	procPostMessageW            = modUser32.NewProc("PostMessageW")
-	procRegisterClassExW        = modUser32.NewProc("RegisterClassExW")
-	procUnregisterClassW        = modUser32.NewProc("UnregisterClassW")
-	procCreateWindowExW         = modUser32.NewProc("CreateWindowExW")
-	procDestroyWindow           = modUser32.NewProc("DestroyWindow")
-	procDefWindowProcW          = modUser32.NewProc("DefWindowProcW")
-	procGetMessageW             = modUser32.NewProc("GetMessageW")
-	procTranslateMessage        = modUser32.NewProc("TranslateMessage")
-	procDispatchMessageW        = modUser32.NewProc("DispatchMessageW")
-	procPostQuitMessage         = modUser32.NewProc("PostQuitMessage")
+	modKernel32               = windows.NewLazySystemDLL("kernel32.dll")
+	procGetModuleHandleW      = modKernel32.NewProc("GetModuleHandleW")
+	procFindWindowExW         = modUser32.NewProc("FindWindowExW")
+	procAllowSetForegroundWin = modUser32.NewProc("AllowSetForegroundWindow")
+	procPostMessageW          = modUser32.NewProc("PostMessageW")
+	procRegisterClassExW      = modUser32.NewProc("RegisterClassExW")
+	procUnregisterClassW      = modUser32.NewProc("UnregisterClassW")
+	procCreateWindowExW       = modUser32.NewProc("CreateWindowExW")
+	procDestroyWindow         = modUser32.NewProc("DestroyWindow")
+	procDefWindowProcW        = modUser32.NewProc("DefWindowProcW")
+	procGetMessageW           = modUser32.NewProc("GetMessageW")
+	procTranslateMessage      = modUser32.NewProc("TranslateMessage")
+	procDispatchMessageW      = modUser32.NewProc("DispatchMessageW")
+	procPostQuitMessage       = modUser32.NewProc("PostQuitMessage")
 
 	singleInstanceMu        sync.RWMutex
 	singleInstanceCallbacks = make(map[uintptr]func())
@@ -255,14 +256,22 @@ func (s *SingleInstance) Close() {
 	s.closed = true
 	s.closeMu.Unlock()
 
+	// Ask the IPC window to close. DestroyWindow cannot be used from here: it only destroys
+	// windows of the calling thread. WM_CLOSE makes DefWindowProc destroy the window, whose
+	// WM_DESTROY handler posts the quit message that ends the loop below.
+	//
+	// Posting WM_QUIT to the thread is deliberately avoided: thread IDs are reused, so a late
+	// post can land in the message queue of an unrelated thread created afterwards, whose
+	// message loop then exits without any error (this used to silently unregister the global
+	// hotkey).
 	if s.hwnd != 0 {
-		r1, _, _ := procPostMessageW.Call(s.hwnd, wmClose, 0, 0)
-		if r1 == 0 {
-			procDestroyWindow.Call(s.hwnd)
-		}
+		procPostMessageW.Call(s.hwnd, wmClose, 0, 0)
 	}
 	if s.done != nil {
-		<-s.done
+		select {
+		case <-s.done:
+		case <-time.After(singleInstanceCloseTimeout):
+		}
 	}
 	if s.mutex != 0 {
 		_ = windows.CloseHandle(s.mutex)

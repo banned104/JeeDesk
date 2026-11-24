@@ -24,6 +24,7 @@ const form = reactive<Settings>({
 });
 
 const recordingHotkey = ref(false);
+const hotkeyInputRef = ref<HTMLInputElement | null>(null);
 
 const mouseTriggerOptions: Array<{ value: MouseTrigger; label: string }> = [
   { value: 'none', label: '关闭' },
@@ -108,6 +109,13 @@ function handleHotkeyKeydown(event: KeyboardEvent) {
   }
 }
 
+function toggleRecording() {
+  recordingHotkey.value = !recordingHotkey.value;
+  if (recordingHotkey.value) {
+    hotkeyInputRef.value?.focus();
+  }
+}
+
 function handleSave() {
   emit('save', {
     hotkey: form.hotkey.trim(),
@@ -154,6 +162,7 @@ function handleSave() {
               </div>
               <div class="flex gap-2">
                 <input
+                  ref="hotkeyInputRef"
                   v-model="form.hotkey"
                   type="text"
                   :placeholder="recordingHotkey ? '请按下快捷键组合 (如 Alt+G)...' : '例如 Alt+G / Ctrl+Shift+Space'"
@@ -166,6 +175,8 @@ function handleSave() {
                   @keydown="handleHotkeyKeydown"
                   @blur="recordingHotkey = false"
                 />
+                <!-- mousedown.prevent keeps focus where it is: the input is not blurred, and focus
+                     does not end up on the button, where keys would never reach the recorder. -->
                 <button
                   type="button"
                   class="px-3 h-9 rounded-xl border transition-colors shrink-0"
@@ -174,7 +185,8 @@ function handleSave() {
                       ? 'bg-sky-500/25 border-sky-400/60 text-sky-200'
                       : 'bg-white/10 hover:bg-white/15 border-white/10 text-slate-200'
                   "
-                  @click="recordingHotkey = !recordingHotkey"
+                  @mousedown.prevent
+                  @click="toggleRecording"
                 >
                   {{ recordingHotkey ? '按键盘...' : '录制' }}
                 </button>

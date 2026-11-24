@@ -87,7 +87,10 @@
 - 根目录 `AGENTS.md` 作为项目约定入口。
 - 应用图标换成红宝石 M9 多普勒，替换掉 Wails 模板的 `W`：`build/appicon.png` 与
   `build/windows/icon.ico`（16/24/32/48/64/128/256 七档）；1024 图与原始素材放 `assets/`。
-  图标是抠掉参考图背景的透明底成品，刀身孔与护手环孔保留为透明，任意底色与深浅主题下都适用。
+  成品由 `assets/source/Gemini_Generated_Image_kks1ackks1ackks1.jpg` 的绿幕原图抠出，
+  透明底，刀身圆孔与护手环孔保留为透明，任意底色与深浅主题下都适用。
+- 顶栏左上角的品牌角标从蓝色四宫格换成同一把刀的缩略图（`frontend/public/brand-m9.png`），
+  与可执行文件图标一致。
 - `README.md` 改写为概览式项目介绍：徽章、特性表、使用步骤、构建与验证、目录结构与已知限制，
   配置、图标机制与 GeekDesk 迁移说明保留，并补致谢。
 

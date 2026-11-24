@@ -20,15 +20,8 @@ const emit = defineEmits<{
   >
     <!-- Brand -->
     <div class="flex items-center gap-2.5 min-w-0">
-      <div
-        class="w-6 h-6 rounded-lg bg-gradient-to-br from-sky-400/90 to-indigo-500/90 flex items-center justify-center shadow-sm border border-white/20 shrink-0"
-      >
-        <svg class="w-3.5 h-3.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-          <rect x="3" y="3" width="7" height="7" rx="1.5" />
-          <rect x="14" y="3" width="7" height="7" rx="1.5" />
-          <rect x="3" y="14" width="7" height="7" rx="1.5" />
-          <rect x="14" y="14" width="7" height="7" rx="1.5" />
-        </svg>
+      <div class="w-6 h-6 rounded-lg bg-white/[0.06] border border-white/15 flex items-center justify-center shrink-0 p-[1px]">
+        <img src="/brand-m9.png" alt="" class="w-full h-full object-contain scale-110" aria-hidden="true" />
       </div>
       <span class="text-sm font-semibold tracking-wide text-white/95">JeeDesk</span>
       <span

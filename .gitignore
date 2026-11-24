@@ -6,6 +6,8 @@ icons/
 build/bin/
 *.exe
 *.syso
+# Hash written by wails build to skip a redundant npm install
+frontend/package.json.md5
 
 # Frontend dependencies & build
 frontend/node_modules/

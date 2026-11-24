@@ -23,10 +23,10 @@
 | `frontend/src` | Vue 界面。`api/bridge.ts` 封装后端调用：自行声明 `WailsGoApp` 接口并直接访问 `window.go.main.App`，同时内置脱离 Wails 在浏览器中开发用的 mock |
 | `frontend/wailsjs` | Wails 构建时自动生成并纳入版本管理，不手工编辑；前端源码不引用它 |
 
-运行时数据是 `config.json` 与 `icons/` 图标缓存，目录由 `resolveBaseDir` 决定：当前工作目录
-已有 `config.json` 时直接采用该目录；否则用可执行文件所在目录（`wails dev` 下即
-`build/bin/`）；仅当可执行文件位于临时目录（`go run`）时回退到当前工作目录。
-两者均被 `.gitignore` 忽略。
+运行时数据是 `config.json` 与 `icons/` 图标缓存，目录由 `resolveBaseDir`（`main.go`）决定：
+开发运行（`go run`、`wails dev`）时是当前工作目录；其他情况下，当前工作目录已有属于 JeeDesk 的
+`config.json`（或一个无法解析的同名文件）时用它，否则用可执行文件所在目录。
+两者均被 `.gitignore` 忽略。磁盘上的 `config.json` 无法读取或解析期间，应用不会写入它。
 
 ## 通用流程来源
 
@@ -47,7 +47,7 @@
 | --- | --- |
 | 分支 | 主分支 `main`（2026-11-24 初始化）；任务分支与 Commit 沿用 Skill 默认。 |
 | 版本 | 唯一现有来源是 `build/windows/info.json`（`fixed.file_version` 与 `info.ProductVersion`，均为 `1.0.0`），`wails build` 用它生成可执行文件的版本资源。`wails.json` 未配置 `info.productVersion`，`frontend/package.json` 的 `version` 只属于前端包。尚无正式发布、Tag 与兼容性政策：普通任务不改版本，发布时按 Skill 先确认约定。 |
-| CHANGELOG | 尚未建立。出现符合 Skill 记录条件的变化时在根目录创建 `CHANGELOG.md`，维护主题届时按维护职责设置。 |
+| CHANGELOG | 根目录 `CHANGELOG.md`，目前只有「开发中」区域，按「维护主题 → 变化类型 → 条目」维护，尚无正式版本章节。 |
 | 债务 | 根目录 `TODO.md`（Skill 默认），出现已确认债务时创建，目前不存在。 |
 | 任务记录 | 见[复杂任务记录与归档](#复杂任务记录与归档)。 |
 | 正式文档 | 尚无 README 及接口、配置、架构、部署文档。当前事实以代码为准：配置结构见 `internal/config/schema.go`；后端绑定见 `app.go` 的导出方法与 `frontend/src/api/bridge.ts` 的 `WailsGoApp` 接口。 |
@@ -66,6 +66,7 @@
 | 格式 | `gofmt -l .`（无输出为通过） |
 | 静态检查 | `go vet ./...` |
 | 行为测试 | `go test ./... -count=1` |
+| 竞态检测 | `CGO_ENABLED=1 go test -race ./... -count=1`（需要 C 编译器，例如 mingw-w64 gcc） |
 | 前端类型检查 | `cd frontend && npm run typecheck` |
 | 前端构建 | `cd frontend && npm install && npm run build` |
 | 完整构建 | `wails build`（产物为 `build/bin/JeeDesk.exe`） |
@@ -77,8 +78,9 @@
   （`internal/...` 各包不受影响）。
 - **前后端契约靠人工同步**：前端不引用 `frontend/wailsjs`，改动 `App` 的导出方法签名或
   `config.json` 结构时，必须同步 `frontend/src/api/bridge.ts` 与 `frontend/src/types/config.ts`。
-  类型检查发现不了这类不一致，需要实际运行验证。
-- **测试的环境影响**：`go test ./...` 会短暂注册全局快捷键 `Ctrl+Alt+Shift+F20`~`F23`、
+  类型检查发现不了这类不一致，需要实际运行验证。`App` 的导出方法签名变化后，用
+  `wails generate module` 重新生成 `frontend/wailsjs`，与 `bridge.ts` 一起提交。
+- **测试的环境影响**：`go test ./...` 会短暂注册全局快捷键 `Ctrl+Alt+Shift+F19`~`F24`、
   安装低级鼠标钩子、创建消息窗口，并调用 PowerShell 生成 `.lnk` 夹具、从 `notepad.exe`
   提取图标，需要 Windows 桌面会话。
 - **按风险选验证**（对应 Skill 的 C、D 两级）：改动 `internal/hook`、`internal/launcher`、

@@ -23,10 +23,19 @@
 | `frontend/src` | Vue 界面。`api/bridge.ts` 封装后端调用：自行声明 `WailsGoApp` 接口并直接访问 `window.go.main.App`，同时内置脱离 Wails 在浏览器中开发用的 mock |
 | `frontend/wailsjs` | Wails 构建时自动生成并纳入版本管理，不手工编辑；前端源码不引用它 |
 
-运行时数据是 `config.json` 与 `icons/` 图标缓存，目录由 `resolveBaseDir`（`main.go`）决定：
+运行时数据是 `config.json`、`config.json.bak`、`icons/` 图标缓存、`usage.json`（启动次数与最近使用）
+与 `logs/app.log`（超过 2 MiB 轮转为 `.1`，`logs/.running` 是异常退出标记），目录由
+`resolveBaseDir`（`main.go`）决定：
 开发运行（`go run`、`wails dev`）时是当前工作目录；其他情况下，当前工作目录已有属于 JeeDesk 的
 `config.json`（或一个无法解析的同名文件）时用它，否则用可执行文件所在目录。
 两者均被 `.gitignore` 忽略。磁盘上的 `config.json` 无法读取或解析期间，应用不会写入它。
+
+`JEEDESK_BASE_DIR` 可覆盖数据目录，`JEEDESK_DEV=1` 显式声明开发运行（无需靠二进制路径猜测）。
+新增的 `App` 绑定（搜索、最近使用、移动排序、撤销、开始菜单导入、配置导入导出、
+`SetModalOpen`、`GetMissingTargets`、`CleanupIcons`、`CheckUpdates` 等）同样必须同步
+`frontend/src/api/bridge.ts`；`frontend/wailsjs` 由 `wails build` / `wails generate module` 生成。
+前端文案通过 `frontend/src/i18n.ts` 的 `t()` 与组件内的 `registerTranslations` 提供英文，
+新增中文文案时同时补英文。
 
 ## 通用流程来源
 

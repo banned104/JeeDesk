@@ -923,6 +923,15 @@ async function handleMoveItem(payload: { groupId: string; fromGroupId: string; i
   }
 }
 
+/** handleReorderGroup applies a long-press drag on the sidebar: MoveGroup takes the post-removal index. */
+async function handleReorderGroup(payload: { groupId: string; toIndex: number }) {
+  try {
+    await bridge.moveGroup(payload.groupId, payload.toIndex);
+  } catch (err) {
+    showToast({ type: 'error', message: t('移动失败: {error}', { error: errorText(err) }) });
+  }
+}
+
 async function handleClearRecent() {
   try {
     await bridge.clearRecentItems();
@@ -1487,6 +1496,7 @@ onBeforeUnmount(() => {
           @toggle-group-collapse="handleToggleGroupCollapsed"
           @contextmenu="openGroupContextMenu"
           @drop-item="handleMoveItem"
+          @reorder-group="handleReorderGroup"
         />
 
         <ItemGrid

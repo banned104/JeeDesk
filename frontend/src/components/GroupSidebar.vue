@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
 import type { Group } from '../types/config';
 import { RECENT_GROUP_ID } from '../types/config';
 import { registerTranslations, t } from '../i18n';
@@ -47,9 +47,169 @@ const emit = defineEmits<{
   (e: 'toggleGroupCollapse', groupId: string): void;
   (e: 'contextmenu', event: MouseEvent, group: Group): void;
   (e: 'dropItem', payload: { groupId: string; fromGroupId: string; itemId: string }): void;
+  (e: 'reorderGroup', payload: { groupId: string; toIndex: number }): void;
 }>();
 
 const dropTargetId = ref('');
+const navRef = ref<HTMLElement | null>(null);
+
+// Long press turns a group row into a draggable handle: a short press is still a click, and a
+// pointer that moves before the timer fires counts as a scroll or a text selection instead.
+const LONG_PRESS_MS = 320;
+const MOVE_CANCEL_PX = 6;
+
+const dragGroupId = ref('');
+const dropSlot = ref(-1);
+let pressTimer: ReturnType<typeof setTimeout> | null = null;
+let pressOrigin = { x: 0, y: 0 };
+let suppressClick = false;
+let autoScrollTimer: ReturnType<typeof setInterval> | null = null;
+let autoScrollDir = 0;
+
+function rows(): HTMLElement[] {
+  return Array.from(navRef.value?.querySelectorAll<HTMLElement>('[data-group-row]') ?? []);
+}
+
+function clearPressTimer() {
+  if (pressTimer !== null) {
+    clearTimeout(pressTimer);
+    pressTimer = null;
+  }
+}
+
+function stopAutoScroll() {
+  if (autoScrollTimer !== null) {
+    clearInterval(autoScrollTimer);
+    autoScrollTimer = null;
+  }
+  autoScrollDir = 0;
+}
+
+function releasePointerListeners() {
+  window.removeEventListener('pointermove', trackPointer);
+  window.removeEventListener('pointerup', finishPress);
+  window.removeEventListener('pointercancel', finishPress);
+  window.removeEventListener('blur', finishPress);
+}
+
+function beginPress(event: PointerEvent, groupId: string) {
+  if (event.button !== 0) return;
+  const target = event.target instanceof HTMLElement ? event.target : null;
+  // The fold toggle sits inside the row; pressing it must not start a drag.
+  if (target?.closest('[data-no-drag]')) return;
+
+  pressOrigin = { x: event.clientX, y: event.clientY };
+  clearPressTimer();
+  pressTimer = setTimeout(() => {
+    pressTimer = null;
+    dragGroupId.value = groupId;
+    dropSlot.value = rows().findIndex((row) => row.dataset.groupRow === groupId);
+    if (dropSlot.value < 0) dropSlot.value = 0;
+    suppressClick = true;
+    document.body.classList.add('select-none');
+  }, LONG_PRESS_MS);
+
+  window.addEventListener('pointermove', trackPointer);
+  window.addEventListener('pointerup', finishPress);
+  window.addEventListener('pointercancel', finishPress);
+  // Losing the window mid-press would otherwise leave the row stuck in its drag state.
+  window.addEventListener('blur', finishPress);
+}
+
+// Scrolling near the edges keeps a long list reachable while the pointer stays still.
+function updateAutoScroll(clientY: number) {
+  const nav = navRef.value;
+  if (!nav) return;
+  const rect = nav.getBoundingClientRect();
+  const margin = 26;
+  let dir = 0;
+  if (clientY < rect.top + margin) dir = -1;
+  else if (clientY > rect.bottom - margin) dir = 1;
+  if (dir === autoScrollDir) return;
+  stopAutoScroll();
+  autoScrollDir = dir;
+  if (dir !== 0) {
+    autoScrollTimer = setInterval(() => {
+      nav.scrollTop += dir * 8;
+    }, 30);
+  }
+}
+
+function trackPointer(event: PointerEvent) {
+  if (!dragGroupId.value) {
+    if (Math.hypot(event.clientX - pressOrigin.x, event.clientY - pressOrigin.y) > MOVE_CANCEL_PX) {
+      clearPressTimer();
+      releasePointerListeners();
+    }
+    return;
+  }
+  event.preventDefault();
+
+  const list = rows();
+  let slot = list.length;
+  for (let i = 0; i < list.length; i += 1) {
+    const rect = list[i].getBoundingClientRect();
+    if (event.clientY < rect.top + rect.height / 2) {
+      slot = i;
+      break;
+    }
+  }
+  dropSlot.value = slot;
+  updateAutoScroll(event.clientY);
+}
+
+/** targetIndex maps a drop slot in the visible rows to MoveGroup's post-removal index. */
+function targetIndex(groupId: string, slot: number): number | null {
+  const ids = visibleGroups.value.map((group) => group.id);
+  const from = props.groups.findIndex((group) => group.id === groupId);
+  if (from < 0) return null;
+
+  const anchorId = slot < ids.length ? ids[slot] : '';
+  if (anchorId === groupId) return null;
+
+  let toIndex: number;
+  if (!anchorId) {
+    toIndex = props.groups.length - 1;
+  } else {
+    const anchor = props.groups.findIndex((group) => group.id === anchorId);
+    if (anchor < 0) return null;
+    toIndex = anchor > from ? anchor - 1 : anchor;
+  }
+  return toIndex === from ? null : toIndex;
+}
+
+function finishPress() {
+  clearPressTimer();
+  releasePointerListeners();
+  stopAutoScroll();
+  document.body.classList.remove('select-none');
+
+  const groupId = dragGroupId.value;
+  const slot = dropSlot.value;
+  dragGroupId.value = '';
+  dropSlot.value = -1;
+  if (!groupId) return;
+
+  const toIndex = targetIndex(groupId, slot);
+  if (toIndex !== null) {
+    emit('reorderGroup', { groupId, toIndex });
+  }
+}
+
+/** Swallows the click that would otherwise select a group right after dropping it. */
+function handleRowClickCapture(event: MouseEvent) {
+  if (!suppressClick) return;
+  suppressClick = false;
+  event.stopPropagation();
+  event.preventDefault();
+}
+
+onBeforeUnmount(() => {
+  clearPressTimer();
+  releasePointerListeners();
+  stopAutoScroll();
+  document.body.classList.remove('select-none');
+});
 // Folded groups can be revealed again, otherwise renaming or deleting one would need a search.
 const showFolded = ref(false);
 
@@ -145,7 +305,7 @@ function handleDrop(event: DragEvent, groupId: string) {
     </div>
 
     <!-- Group List -->
-    <nav class="flex-1 overflow-y-auto custom-scrollbar px-1.5 space-y-1">
+    <nav ref="navRef" class="flex-1 overflow-y-auto custom-scrollbar px-1.5 space-y-1">
       <!-- Virtual recent group -->
       <button
         v-if="showRecent"
@@ -184,21 +344,31 @@ function handleDrop(event: DragEvent, groupId: string) {
       </button>
 
       <div
-        v-for="group in visibleGroups"
+        v-for="(group, index) in visibleGroups"
         :key="group.id"
-        class="group relative w-full h-9 rounded-xl transition-all duration-150"
+        class="group relative w-full h-9 rounded-xl transition-all duration-150 touch-none"
         :class="[
           group.id === activeGroupId
             ? 'jd-surface-strong jd-text font-medium border jd-border-strong shadow-sm'
             : 'jd-muted jd-hover border border-transparent',
           dropTargetId === group.id ? 'ring-2 ring-sky-400/80' : '',
+          dragGroupId === group.id ? 'opacity-60 ring-2 ring-sky-400/70 cursor-grabbing' : '',
+          dragGroupId && dragGroupId !== group.id ? 'cursor-grabbing' : '',
         ]"
         :data-group-id="group.id"
+        :data-group-row="group.id"
+        @pointerdown="beginPress($event, group.id)"
+        @click.capture="handleRowClickCapture"
         @contextmenu.prevent="emit('contextmenu', $event, group)"
         @dragover="handleDragOver($event, group.id)"
         @dragleave="handleDragLeave(group.id)"
         @drop="handleDrop($event, group.id)"
       >
+        <span
+          v-if="dragGroupId && dropSlot === index"
+          class="pointer-events-none absolute -top-0.5 left-1 right-1 h-0.5 rounded-full jd-accent-bg"
+          aria-hidden="true"
+        />
         <span
           v-if="group.id === activeGroupId"
           class="absolute left-0.5 top-2 bottom-2 w-0.5 rounded-full jd-accent-bg"
@@ -242,6 +412,7 @@ function handleDrop(event: DragEvent, groupId: string) {
         <button
           v-if="!collapsed"
           type="button"
+          data-no-drag
           class="absolute right-0.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded-md flex items-center justify-center opacity-60 group-hover:opacity-100 transition-opacity"
           :aria-label="isFolded(group.id) ? t('展开分组') : t('折叠分组')"
           :title="isFolded(group.id) ? t('展开分组') : t('折叠分组')"
@@ -261,6 +432,11 @@ function handleDrop(event: DragEvent, groupId: string) {
           </svg>
         </button>
       </div>
+      <span
+        v-if="dragGroupId && dropSlot === visibleGroups.length"
+        class="pointer-events-none block h-0.5 mx-1 rounded-full jd-accent-bg"
+        aria-hidden="true"
+      />
     </nav>
 
     <!-- Folded groups can be revealed, so a folded group stays editable -->

@@ -1004,3 +1004,63 @@ func TestSyncIconCacheVersionDropsStaleIcons(t *testing.T) {
 		t.Fatalf("expected the current-version icon to survive: %v", err)
 	}
 }
+
+// TestMoveGroupUsesPostRemovalIndex locks the index contract the sidebar drag relies on: MoveGroup
+// removes the group first, then inserts at toIndex, clamped to the remaining length.
+func TestMoveGroupUsesPostRemovalIndex(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	mgr, err := config.NewManager(cfgPath, nil, nil)
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer mgr.Close()
+
+	app := &App{baseDir: dir, configPath: cfgPath, iconsDir: filepath.Join(dir, "icons")}
+	app.setConfigManager(mgr)
+
+	order := func() string {
+		ids := ""
+		for _, group := range mgr.Get().Groups {
+			ids += group.ID
+		}
+		return ids
+	}
+	setGroups := func(ids string) {
+		groups := make([]config.Group, 0, len(ids))
+		for _, id := range ids {
+			groups = append(groups, config.Group{ID: string(id), Name: string(id)})
+		}
+		if err := mgr.Update(func(c *config.Config) error {
+			c.Groups = groups
+			return nil
+		}); err != nil {
+			t.Fatalf("seed groups: %v", err)
+		}
+	}
+
+	cases := []struct {
+		name    string
+		from    string
+		toIndex int
+		want    string
+	}{
+		{"first to last", "A", 3, "BCDA"},
+		{"last to first", "D", 0, "DABC"},
+		{"middle forward", "B", 2, "ACBD"},
+		{"middle backward", "C", 1, "ACBD"},
+		{"clamped high", "A", 99, "BCDA"},
+		{"clamped low", "D", -5, "DABC"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setGroups("ABCD")
+			if err := app.MoveGroup(tc.from, tc.toIndex); err != nil {
+				t.Fatalf("MoveGroup failed: %v", err)
+			}
+			if got := order(); got != tc.want {
+				t.Fatalf("order after moving %s to %d = %s, want %s", tc.from, tc.toIndex, got, tc.want)
+			}
+		})
+	}
+}

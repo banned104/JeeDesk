@@ -27,6 +27,7 @@
 | `internal/search` | 跨分组搜索的评分与排序 |
 | `internal/tray` | 系统托盘与内置图标数据 |
 | `internal/usage` | `usage.json`：启动次数与最近使用 |
+| `tools/geekdesk-migration` | 一次性迁移工具：`gf_dump.cs` 把 GeekDesk 2.5.14 的 `Data` 导出为 JSON。编译与用法见 `docs/geekdesk-migration.md`；编译产物 `*.exe` 由 `.gitignore` 忽略 |
 | `frontend/src` | Vue 界面。`api/bridge.ts` 封装后端调用：自行声明 `WailsGoApp` 接口并直接访问 `window.go.main.App`，同时内置脱离 Wails 在浏览器中开发用的 mock |
 | `frontend/wailsjs` | Wails 构建时自动生成并纳入版本管理，不手工编辑；前端源码不引用它 |
 

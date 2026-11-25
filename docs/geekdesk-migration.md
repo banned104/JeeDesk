@@ -1,7 +1,9 @@
 # 从 GeekDesk 迁移到 JeeDesk
 
 本文记录把 GeekDesk 2.5.14 中已保存的快速启动项完整迁移到 JeeDesk 的过程,可复现。
-迁移工具与中间产物存放在本地 `_scratch/_done_20261125-geekdesk-migration/`(不入库)。
+导出工具是 [`tools/geekdesk-migration/gf_dump.cs`](../tools/geekdesk-migration/gf_dump.cs)(随仓库分发);
+导出的 `geekdesk-data.json`、生成的 `config.json` 与过程记录属于中间产物,**只留在本地**
+(它们含本机路径与个人条目),不入库。
 
 ## 迁移对象的数据格式
 
@@ -24,7 +26,8 @@ BinaryFormatter 是二进制格式,手工解析不现实;但 GeekDesk 交付目�
 
 ### 1. 导出 JSON
 
-辅助程序 `_scratch/_done_20261125-geekdesk-migration/gf_dump.cs`:
+辅助程序 [`tools/geekdesk-migration/gf_dump.cs`](../tools/geekdesk-migration/gf_dump.cs)。用 .NET Framework
+自带的 `csc` 编译(`csc` 不在 PATH 时在 `%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe`):
 
 ```powershell
 csc -nologo -out:gf_dump.exe `
@@ -33,8 +36,10 @@ csc -nologo -out:gf_dump.exe `
 gf_dump.exe "E:\GeekDesk 2.5.14\Data" geekdesk-data.json
 ```
 
-- `Main` 只装 `AssemblyResolve` 钩子(从 GeekDesk 目录与 `lib/` 解析 DLL),实际逻辑放在
-  第二个方法里——否则 Main 方法被 JIT 时会在钩子生效前解析 Newtonsoft.Json,直接失败。
+- `Main` 只做字符串运算与装 `AssemblyResolve` 钩子(从 GeekDesk 目录与 `lib/` 解析 DLL),
+  反序列化与 JSON 序列化放在 `RealMain` 里——`Main` 一旦引用 Newtonsoft.Json 的类型,
+  JIT 会在钩子生效前就去解析它,报 `FileLoadException`。同理,GeekDesk 目录必须在进 `RealMain`
+  之前算好:默认取 `Data` 的父目录,也可以作为第三个参数显式传入。
 - JSON 序列化用自定义 ContractResolver,只取实例字段,绕开属性 getter 的写盘副作用。
 - 导出前后核对原 `Data` 的 mtime/大小,确认未动。
 

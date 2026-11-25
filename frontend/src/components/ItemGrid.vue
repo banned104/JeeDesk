@@ -63,11 +63,17 @@ const emit = defineEmits<{
   (e: 'addGroup'): void;
   (e: 'select', index: number): void;
   (e: 'openStartMenuImport'): void;
+  (
+    e: 'reorder',
+    payload: { fromGroupId: string; toGroupId: string; itemId: string; toIndex: number }
+  ): void;
 }>();
 
 const dragDepth = ref(0);
 const isDragOver = ref(false);
 const tileRefs = ref<HTMLButtonElement[]>([]);
+/** Index of the tile the dragged item would land on, or null when nothing is being dragged. */
+const dropIndex = ref<number | null>(null);
 
 const showSkeleton = computed(() => !props.configReady || props.loading);
 
@@ -155,6 +161,54 @@ function handleDragStart(event: DragEvent, entry: DisplayItem) {
   );
 }
 
+/** readDraggedItem returns the tile payload of an internal drag, or null for a file drag. */
+function readDraggedItem(event: DragEvent): { groupId: string; itemId: string } | null {
+  const raw = event.dataTransfer?.getData('application/x-jeedesk-item');
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { groupId?: unknown; itemId?: unknown };
+    if (typeof parsed.groupId !== 'string' || typeof parsed.itemId !== 'string') return null;
+    return { groupId: parsed.groupId, itemId: parsed.itemId };
+  } catch {
+    return null;
+  }
+}
+
+function handleTileDragOver(event: DragEvent, index: number) {
+  // Files are the container's business and the search/recent lists are not orderable.
+  if (props.mode !== 'group' || isFileDrag(event)) return;
+  if (!event.dataTransfer?.types.includes('application/x-jeedesk-item')) return;
+  event.preventDefault();
+  event.stopPropagation();
+  event.dataTransfer.dropEffect = 'move';
+  dropIndex.value = index;
+}
+
+function handleTileDragLeave(index: number) {
+  if (dropIndex.value === index) {
+    dropIndex.value = null;
+  }
+}
+
+function handleTileDrop(event: DragEvent, index: number) {
+  dropIndex.value = null;
+  const dragged = readDraggedItem(event);
+  const target = props.items[index];
+  if (!dragged || !target) return;
+  event.preventDefault();
+  event.stopPropagation();
+  emit('reorder', {
+    fromGroupId: dragged.groupId,
+    toGroupId: target.groupId,
+    itemId: dragged.itemId,
+    toIndex: index,
+  });
+}
+
+function handleTileDragEnd() {
+  dropIndex.value = null;
+}
+
 async function ensureSelectionVisible() {
   await nextTick();
   const tile = tileRefs.value[props.selectedIndex];
@@ -214,6 +268,7 @@ defineExpose({ ensureSelectionVisible });
             ? 'jd-surface-strong jd-border-strong ring-1 ring-sky-400/70'
             : 'border-transparent jd-hover',
           isLaunching(entry) ? 'opacity-50 saturate-50 cursor-progress' : '',
+          dropIndex === index ? 'ring-2 ring-sky-400/80 jd-surface-strong' : '',
         ]"
         :aria-disabled="isLaunching(entry)"
         :data-launching="isLaunching(entry) ? 'true' : undefined"
@@ -222,6 +277,10 @@ defineExpose({ ensureSelectionVisible });
         @dblclick="handleDoubleClick(entry, index)"
         @contextmenu.prevent="handleContextMenu($event, entry, index)"
         @dragstart="handleDragStart($event, entry)"
+        @dragover="handleTileDragOver($event, index)"
+        @dragleave="handleTileDragLeave(index)"
+        @drop="handleTileDrop($event, index)"
+        @dragend="handleTileDragEnd"
         @mouseenter="emit('select', index)"
       >
         <ItemIcon

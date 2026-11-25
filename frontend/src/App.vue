@@ -281,15 +281,41 @@ const gridMode = computed<'group' | 'search' | 'recent'>(() => {
   return 'group';
 });
 
+/**
+ * dismissibleOverlays is the single list of things that cover the panel. Escape closes the topmost
+ * open one and the blur guard reads the same list, so a new dialog cannot be added to one place and
+ * forgotten in the other. The closures defer to the real handlers, which keeps the declaration free
+ * of ordering constraints.
+ */
+const dismissibleOverlays: Array<{ name: string; isOpen: () => boolean; dismiss: () => void }> = [
+  { name: 'contextMenu', isOpen: () => contextMenu.visible, dismiss: () => closeContextMenu() },
+  {
+    name: 'itemModal',
+    isOpen: () => itemModal.visible,
+    dismiss: () => {
+      itemModal.visible = false;
+    },
+  },
+  {
+    name: 'groupModal',
+    isOpen: () => groupModal.visible,
+    dismiss: () => {
+      groupModal.visible = false;
+    },
+  },
+  {
+    name: 'startMenuModal',
+    isOpen: () => startMenuModal.visible,
+    dismiss: () => {
+      startMenuModal.visible = false;
+    },
+  },
+  { name: 'confirmDialog', isOpen: () => confirmDialog.visible, dismiss: () => closeConfirm() },
+  { name: 'settings', isOpen: () => settingsOpen.value, dismiss: () => closeSettings() },
+];
+
 // Any dialog on screen keeps the window from hiding itself on blur (file pickers, alt-tab).
-const anyModalOpen = computed(
-  () =>
-    settingsOpen.value ||
-    itemModal.visible ||
-    groupModal.visible ||
-    startMenuModal.visible ||
-    contextMenu.visible
-);
+const anyModalOpen = computed(() => dismissibleOverlays.some((overlay) => overlay.isOpen()));
 
 watch(
   anyModalOpen,
@@ -932,6 +958,21 @@ async function handleReorderGroup(payload: { groupId: string; toIndex: number })
   }
 }
 
+/** handleReorderItems applies an in-grid drag: the dropped tile takes the target tile's slot. */
+async function handleReorderItems(payload: {
+  fromGroupId: string;
+  toGroupId: string;
+  itemId: string;
+  toIndex: number;
+}) {
+  try {
+    await bridge.moveItem(payload.fromGroupId, payload.itemId, payload.toGroupId, payload.toIndex);
+    revealItems(payload.toGroupId);
+  } catch (err) {
+    showToast({ type: 'error', message: t('移动失败: {error}', { error: errorText(err) }) });
+  }
+}
+
 async function handleClearRecent() {
   try {
     await bridge.clearRecentItems();
@@ -1016,14 +1057,7 @@ function isSearchInput(target: EventTarget | null): boolean {
 }
 
 function isOverlayOpen(): boolean {
-  return (
-    settingsOpen.value ||
-    itemModal.visible ||
-    groupModal.visible ||
-    startMenuModal.visible ||
-    confirmDialog.visible ||
-    contextMenu.visible
-  );
+  return anyModalOpen.value;
 }
 
 /**
@@ -1046,24 +1080,9 @@ function cycleGroup(delta: number) {
 function handleWindowKeyDown(event: KeyboardEvent) {
   // Modals and dialogs keep their own key handling.
   if (event.key === 'Escape') {
-    if (contextMenu.visible) {
-      closeContextMenu();
-      return;
-    }
-    if (itemModal.visible) {
-      itemModal.visible = false;
-      return;
-    }
-    if (groupModal.visible) {
-      groupModal.visible = false;
-      return;
-    }
-    if (startMenuModal.visible) {
-      startMenuModal.visible = false;
-      return;
-    }
-    if (settingsOpen.value) {
-      closeSettings();
+    const overlay = dismissibleOverlays.find((candidate) => candidate.isOpen());
+    if (overlay) {
+      overlay.dismiss();
       return;
     }
     if (isSearching.value) {
@@ -1545,6 +1564,7 @@ onBeforeUnmount(() => {
           @add-item="openCreateItemModal"
           @add-group="openAddGroupModal"
           @open-start-menu-import="openStartMenuImport"
+          @reorder="handleReorderItems"
         />
       </div>
 

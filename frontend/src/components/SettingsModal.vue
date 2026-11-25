@@ -102,8 +102,8 @@ registerTranslations({
   '导入配置': 'Import config',
   '重置窗口位置': 'Reset window position',
   '从开始菜单导入': 'Import from Start Menu',
-  '重载配置会从磁盘重新读取设置与分组；导入配置会用备份文件覆盖现有设置与分组。':
-    'Reloading re-reads settings and groups from disk; importing overwrites them with a backup file.',
+  '重载配置会从磁盘重新读取设置与分组；导入配置会用你选择的 JSON 整份替换现有设置与分组。':
+    'Reloading re-reads settings and groups from disk; importing replaces them with the JSON file you pick.',
   '关于': 'About',
   '版本': 'Version',
   '配置文件': 'Config file',
@@ -1284,7 +1284,7 @@ onBeforeUnmount(() => {
               </div>
 
               <p class="text-[11px] jd-subtle leading-relaxed">
-                {{ t('重载配置会从磁盘重新读取设置与分组；导入配置会用备份文件覆盖现有设置与分组。') }}
+                {{ t('重载配置会从磁盘重新读取设置与分组；导入配置会用你选择的 JSON 整份替换现有设置与分组。') }}
               </p>
             </section>
 

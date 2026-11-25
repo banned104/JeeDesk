@@ -291,6 +291,13 @@ function finishPress() {
     settleTimer = null;
     resetDragState();
   }, 160);
+
+  // The click that follows a drop is dispatched right after pointerup, in the same task. Clearing
+  // the flag on the next tick keeps the drop from also selecting a group while making sure a drag
+  // that ended over a gap (where no row click fires) cannot swallow the next real click.
+  window.setTimeout(() => {
+    suppressClick = false;
+  }, 0);
 }
 
 function resetDragState() {

@@ -27,6 +27,8 @@ interface WailsGoApp {
   SaveSettings(settings: Settings): Promise<void>;
   ReloadConfig(): Promise<void>;
   OpenConfigFile(): Promise<void>;
+  Quit(): Promise<void>;
+  ToggleWindow(): Promise<void>;
   PickFile(title: string, filterName: string, pattern: string): Promise<string>;
   PickDirectory(title: string): Promise<string>;
   HideWindow(): Promise<void>;
@@ -409,6 +411,22 @@ export const bridge = {
       return;
     }
     emitMockEvent('ui:toast', { type: 'info', message: '[Dev] 打开 config.json' } satisfies ToastPayload);
+  },
+
+  async quit(): Promise<void> {
+    const app = getApp();
+    if (app) {
+      await app.Quit();
+      return;
+    }
+    emitMockEvent('ui:toast', { type: 'info', message: '[Dev] 退出程序' } satisfies ToastPayload);
+  },
+
+  async toggleWindow(): Promise<void> {
+    const app = getApp();
+    if (app) {
+      await app.ToggleWindow();
+    }
   },
 
   async pickFile(title: string, filterName: string, pattern: string): Promise<string> {

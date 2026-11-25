@@ -7,30 +7,9 @@
 - **版本来源仍有两处**：`build/windows/info.json` 的可执行文件版本资源，与 `app.go` 的
   `appVersion` 变量（可用 `-ldflags -X main.appVersion=…` 覆盖）。发布流程确定后应改为单一来源
   并在构建脚本里同时写入，否则"关于"里的版本会和文件属性不一致。
-- **更新检查指向 GitHub Releases**：仓库目前没有正式发布，`CheckUpdates` 只会返回"尚未发布任何版本"。
-  有了第一个 Release 之后需要复核 tag 命名（当前按 `v1.2.3` / `1.2.3` 都能比较）
-
-## 缺陷（2026-11-25 全量审查确认）
-
-- **撤销快照在写盘前就清空**：`app_features.go` 的 `UndoDeleteItem` / `UndoDeleteGroup` 先取走
-  `deletedItem` / `deletedGroup` 再调 `mgr.Update`，写入失败（如 `ErrWriteBlocked`）时不归还快照，
-  已删除内容再无恢复入口。验收：写入失败后快照仍在，`Ctrl+Z` 可以重试。
-- **图标缓存版本升级后不重建**：`app_diagnostics.go` 的 `syncIconCacheVersion` 会删光
-  `icons/*.png`，而 `EnsureIcons` 跳过 `item.Icon != ""` 的条目，于是所有图标退成内置默认图且不再重建。
-  验收：改动 `iconCacheVersion` 后启动，缓存图标自动补齐（前端 `ItemIcon.vue` 命中过 404）。
-- **网格内的项目拖动排序未接线**：`ItemGrid.vue` 只有 `@dragstart` 设置载荷，没有 tile 级
-  `dragover`/`drop`，目前只能右键上移/下移。验收：拖动 tile 到新位置后顺序落盘。
-- **分组拖动后可能吞掉一次点击**：`GroupSidebar.vue` 的 `suppressClick` 只在「松手落在同一行」时消费，
-  拖到别行或空隙后标志位残留，下一次短按（含折叠按钮）被静默忽略。验收：任何拖动结束后首次短按都生效。
-- **窗口坐标与文档不符**：`settings.window_x/window_y` 在 `schema.go` 里声明为位置坐标，
-  `flushWindowState` 存的是物理像素、`moveWindowTo` 也按物理像素复原（自洽但与 DIP 文档不一致，
-  混缩放屏之间会偏移）。验收：坐标同样按 DIP 存取。
-- **配置界面有三处「有哪些弹窗」清单**：`App.vue` 的 `anyModalOpen`、`isOverlayOpen`、Esc 链已漂移
-  （`anyModalOpen` 漏了 `confirmDialog`，确认框打开时切走窗口仍会失焦隐藏）。验收：三处收敛为一处判断。
-- **桥接接口缺两个方法**：`bridge.ts` 的 `WailsGoApp` 未声明 `Quit` 与 `ToggleWindow`
-  （生成的 `frontend/wailsjs/go/main/App.d.ts` 里有），违反 AGENTS.md 的绑定同步约定。前端目前未调用。
-- **`ErrElevationCancelled` 无人消费**：`app.go` 的启动路径原样返回错误，前端照弹「启动失败: 已取消管理员授权」，
-  与「取消提权不算失败」的规格相反。验收：取消提权不弹错误、不计入最近使用。
+- **更新检查指向 GitHub Releases**：`v1.0.0` 已是首个正式发布，但 `CheckUpdates` 还没有对着真实
+  Release 复核过一遍（tag 命名 `v1.2.3` / `1.2.3` 都能比较，需要确认取到的 `tag_name` 正是这一格式）。
+  验收：在 1.0.0 版上点「检查更新」显示「已是最新」，把版本手动改小后能提示 1.0.0。
 
 ## 功能缺口
 

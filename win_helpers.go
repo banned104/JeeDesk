@@ -264,14 +264,7 @@ func monitorWorkArea(monitor uintptr) (winRECT, bool) {
 // workAreaOf reports the desktop area of the monitor the window is on, excluding the taskbar.
 func workAreaOf(hwnd uintptr) (winRECT, bool) {
 	monitor, _, _ := procMonitorFromWindow.Call(hwnd, monitorDefaultToNearest)
-	if monitor == 0 {
-		return winRECT{}, false
-	}
-	info := winMONITORINFO{cbSize: uint32(unsafe.Sizeof(winMONITORINFO{}))}
-	if r, _, _ := procGetMonitorInfoW.Call(monitor, uintptr(unsafe.Pointer(&info))); r == 0 {
-		return winRECT{}, false
-	}
-	return info.rcWork, true
+	return monitorWorkArea(monitor)
 }
 
 // moveWindowTo moves the window without resizing or changing its z-order.

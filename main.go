@@ -92,7 +92,7 @@ func main() {
 		BackgroundColour: &options.RGBA{R: 18, G: 22, B: 32, A: 0},
 		AssetServer: &assetserver.Options{
 			Assets:     assets,
-			Middleware: newIconMiddleware(app.iconsDir),
+			Middleware: newIconMiddleware(app.iconsDir, customIconRoots(baseDir)),
 		},
 		DragAndDrop: &options.DragAndDrop{
 			EnableFileDrop:     true,
@@ -215,8 +215,9 @@ func pickBaseDir(cwd string, cwdOK bool, exePath string, exeOK bool) string {
 	if !cwdOK {
 		cwd = ""
 	}
-	// JEEDESK_DEV=1 marks a developer run explicitly instead of guessing from the binary path.
-	if cwd != "" && strings.TrimSpace(os.Getenv("JEEDESK_DEV")) == "1" {
+	// An explicit marker beats guessing from the binary path: JEEDESK_DEV=1 for a hand-started
+	// developer run, and the assetdir variable wails dev sets for the process it launches.
+	if cwd != "" && devLaunch() {
 		return cwd
 	}
 	if cwd != "" && config.LooksLikeConfig(filepath.Join(cwd, "config.json")) {
@@ -236,10 +237,17 @@ func pickBaseDir(cwd string, cwdOK bool, exePath string, exeOK bool) string {
 	return "."
 }
 
+// devLaunch reports an explicitly marked development run.
+func devLaunch() bool {
+	if strings.TrimSpace(os.Getenv("JEEDESK_DEV")) == "1" {
+		return true
+	}
+	return strings.TrimSpace(os.Getenv("assetdir")) != ""
+}
+
 // isDevBinaryDir reports whether exeDir is where go run or wails dev place the binary: Go's build
-// cache under the user's temp directory, or the project's own build/bin. wails dev runs that binary
-// with the project root as working directory, so cwd is the project root; it is empty when the
-// working directory could not be determined, which leaves only the temp-directory check.
+// cache under the user's temp directory, or the project's own build/bin. It is the fallback for
+// runs without a marker; devLaunch handles wails dev and JEEDESK_DEV=1 first.
 func isDevBinaryDir(exeDir, cwd string) bool {
 	lowerExe := strings.ToLower(exeDir)
 	if strings.Contains(lowerExe, `\appdata\local\temp\`) ||
@@ -260,9 +268,35 @@ var allowedCustomIconExts = map[string]bool{
 	".ico":  true,
 }
 
+// customIconRoots are the only trees the custom icon endpoint reads from: the data directory and
+// the user's profile. A crafted config.json cannot make JeeDesk serve images from %WINDIR% or from
+// another account's folder.
+func customIconRoots(baseDir string) []string {
+	roots := []string{baseDir}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		roots = append(roots, home)
+	}
+	return roots
+}
+
+// pathWithinRoots reports whether path is one of roots or below it, case-insensitively.
+func pathWithinRoots(path string, roots []string) bool {
+	cleaned := strings.ToLower(filepath.Clean(path))
+	for _, root := range roots {
+		base := strings.ToLower(filepath.Clean(root))
+		if base == "" || base == "." {
+			continue
+		}
+		if cleaned == base || strings.HasPrefix(cleaned, base+string(os.PathSeparator)) {
+			return true
+		}
+	}
+	return false
+}
+
 // newIconMiddleware serves cached icons from /icons/<file> and user-specified
 // custom icons from /custom-icon?path=<encoded-path>.
-func newIconMiddleware(iconsDir string) assetserver.Middleware {
+func newIconMiddleware(iconsDir string, customRoots []string) assetserver.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
@@ -270,7 +304,7 @@ func newIconMiddleware(iconsDir string) assetserver.Middleware {
 				serveCachedIcon(w, r, iconsDir)
 				return
 			case r.URL.Path == "/custom-icon":
-				serveCustomIcon(w, r, iconsDir)
+				serveCustomIcon(w, r, iconsDir, customRoots)
 				return
 			default:
 				next.ServeHTTP(w, r)
@@ -318,9 +352,9 @@ func serveCachedIcon(w http.ResponseWriter, r *http.Request, iconsDir string) {
 	http.ServeFile(w, r, fullPath)
 }
 
-func serveCustomIcon(w http.ResponseWriter, r *http.Request, iconsDir string) {
+func serveCustomIcon(w http.ResponseWriter, r *http.Request, iconsDir string, customRoots []string) {
 	rawPath := strings.TrimSpace(r.URL.Query().Get("path"))
-	if rawPath == "" || !safeCustomIconPath(rawPath) {
+	if rawPath == "" || !safeCustomIconPath(rawPath) || !pathWithinRoots(rawPath, customRoots) {
 		http.NotFound(w, r)
 		return
 	}

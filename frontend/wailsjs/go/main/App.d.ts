@@ -40,8 +40,6 @@ export function GetRecentItems(arg1:number):Promise<Array<main.RecentItem>>;
 
 export function GetUndoLabel():Promise<string>;
 
-export function HasUndo():Promise<string>;
-
 export function HideWindow():Promise<void>;
 
 export function ImportConfig():Promise<number>;
@@ -75,6 +73,8 @@ export function Quit():Promise<void>;
 export function RebuildConfigFile():Promise<void>;
 
 export function ReloadConfig():Promise<void>;
+
+export function RelocateItem(arg1:string,arg2:string):Promise<string>;
 
 export function RenameGroup(arg1:string,arg2:string):Promise<void>;
 

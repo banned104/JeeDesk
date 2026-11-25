@@ -74,10 +74,6 @@ export function GetUndoLabel() {
   return window['go']['main']['App']['GetUndoLabel']();
 }
 
-export function HasUndo() {
-  return window['go']['main']['App']['HasUndo']();
-}
-
 export function HideWindow() {
   return window['go']['main']['App']['HideWindow']();
 }
@@ -144,6 +140,10 @@ export function RebuildConfigFile() {
 
 export function ReloadConfig() {
   return window['go']['main']['App']['ReloadConfig']();
+}
+
+export function RelocateItem(arg1, arg2) {
+  return window['go']['main']['App']['RelocateItem'](arg1, arg2);
 }
 
 export function RenameGroup(arg1, arg2) {

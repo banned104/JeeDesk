@@ -155,12 +155,6 @@ func (a *App) configManager() *config.Manager {
 	return a.cfgMgr
 }
 
-func (a *App) setConfigManager(mgr *config.Manager) {
-	a.cfgMu.Lock()
-	a.cfgMgr = mgr
-	a.cfgMu.Unlock()
-}
-
 // hooks returns the hook managers, both nil before startup created them.
 func (a *App) hooks() (*hook.HotkeyManager, *hook.MouseHookManager) {
 	a.hookMu.Lock()
@@ -743,6 +737,9 @@ func (a *App) ShowWindow() {
 	runtime.WindowShow(ctx)
 	a.startBlurMonitor()
 	a.emitEvent("window:shown", nil)
+	// Windows silently drops low-level hooks whose callback timed out while the panel was hidden;
+	// asking the manager for the current trigger rebuilds a dead hook and is a no-op otherwise.
+	a.refreshMouseHook()
 
 	if wasVisible {
 		return
@@ -771,6 +768,19 @@ func (a *App) HideWindow() {
 		return
 	}
 	runtime.WindowHide(ctx)
+	a.emitEvent("window:hidden", nil)
+}
+
+// refreshMouseHook re-applies the configured mouse trigger, which reinstalls a hook Windows dropped.
+func (a *App) refreshMouseHook() {
+	_, mouseMgr := a.hooks()
+	if mouseMgr == nil {
+		return
+	}
+	trigger := a.GetConfig().Settings.MouseTrigger
+	if err := mouseMgr.Update(trigger); err != nil {
+		log.Printf("[hook] failed to re-apply mouse trigger %q on show: %v", trigger, err)
+	}
 }
 
 // ToggleWindow toggles JeeDesk window visibility, bringing an unfocused

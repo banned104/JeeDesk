@@ -114,6 +114,11 @@ registerTranslations({
   '打开日志': 'Open log',
   '清理图标缓存': 'Clean icon cache',
   '清理中…': 'Cleaning…',
+  '补齐缺失图标': 'Fill missing icons',
+  '补齐中…': 'Filling…',
+  '已补齐 {count} 个图标': 'Filled {count} icons',
+  '图标都已齐全': 'All items already have icons',
+  '补齐图标失败：{error}': 'Filling icons failed: {error}',
   '已是最新版本（{current}）': 'You are up to date ({current})',
   '发现新版本 {latest}（当前 {current}）': 'New version {latest} is available (current {current})',
   '检查更新失败：{error}': 'Update check failed: {error}',
@@ -369,6 +374,9 @@ const updateError = ref('');
 const cleanupRunning = ref(false);
 const cleanupMessage = ref('');
 const cleanupError = ref('');
+const fillRunning = ref(false);
+const fillMessage = ref('');
+const fillError = ref('');
 const logError = ref('');
 
 let confirmTimer: number | undefined;
@@ -671,6 +679,9 @@ function resetTransientState() {
   cleanupRunning.value = false;
   cleanupMessage.value = '';
   cleanupError.value = '';
+  fillRunning.value = false;
+  fillMessage.value = '';
+  fillError.value = '';
   logError.value = '';
   clearTimers();
 }
@@ -801,6 +812,22 @@ async function handleOpenLogFile() {
     await bridge.openLogFile();
   } catch (err) {
     logError.value = t('打开日志失败：{error}', { error: errorText(err) });
+  }
+}
+
+async function handleFillIcons() {
+  if (fillRunning.value) return;
+  fillRunning.value = true;
+  fillMessage.value = '';
+  fillError.value = '';
+  try {
+    const filled = await bridge.ensureIcons();
+    fillMessage.value =
+      filled > 0 ? t('已补齐 {count} 个图标', { count: filled }) : t('图标都已齐全');
+  } catch (err) {
+    fillError.value = t('补齐图标失败：{error}', { error: errorText(err) });
+  } finally {
+    fillRunning.value = false;
   }
 }
 
@@ -1298,7 +1325,15 @@ onBeforeUnmount(() => {
                 </button>
                 <button
                   type="button"
-                  class="col-span-2 h-8 px-3 rounded-xl border text-[11px] transition-colors jd-border jd-surface-soft jd-muted jd-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/70 disabled:opacity-50 disabled:pointer-events-none"
+                  class="h-8 px-3 rounded-xl border text-[11px] transition-colors jd-border jd-surface-soft jd-muted jd-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/70 disabled:opacity-50 disabled:pointer-events-none"
+                  :disabled="fillRunning"
+                  @click="handleFillIcons"
+                >
+                  {{ fillRunning ? t('补齐中…') : t('补齐缺失图标') }}
+                </button>
+                <button
+                  type="button"
+                  class="h-8 px-3 rounded-xl border text-[11px] transition-colors jd-border jd-surface-soft jd-muted jd-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/70 disabled:opacity-50 disabled:pointer-events-none"
                   :disabled="cleanupRunning"
                   @click="handleCleanupIcons"
                 >
@@ -1320,6 +1355,12 @@ onBeforeUnmount(() => {
                 </button>
               </div>
 
+              <p v-if="fillMessage" class="text-[11px] text-emerald-400 leading-relaxed">
+                {{ fillMessage }}
+              </p>
+              <p v-if="fillError" class="text-[11px] text-rose-400 leading-relaxed break-all">
+                {{ fillError }}
+              </p>
               <p v-if="cleanupMessage" class="text-[11px] text-emerald-400 leading-relaxed">
                 {{ cleanupMessage }}
               </p>

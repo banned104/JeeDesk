@@ -58,18 +58,21 @@ interface WailsGoApp {
   SetModalOpen(open: boolean): Promise<void>;
   GetMissingTargets(): Promise<string[]>;
   CleanupIcons(): Promise<number>;
+  EnsureIcons(): Promise<number>;
   RebuildConfigFile(): Promise<void>;
   OpenLogFile(): Promise<void>;
   CheckUpdates(): Promise<UpdateInfo>;
   SetCollapsedGroups(ids: string[]): Promise<void>;
   SetItemAdmin(groupID: string, itemID: string, admin: boolean): Promise<void>;
   OpenURL(url: string): Promise<void>;
+  RelocateItem(groupID: string, itemID: string): Promise<string>;
 }
 
 interface WailsRuntime {
   EventsOn(eventName: string, callback: (...data: unknown[]) => void): (() => void) | void;
   EventsOff(eventName: string, ...additionalEventNames: string[]): void;
   OnFileDrop(callback: (x: number, y: number, paths: string[]) => void, useDropTarget?: boolean): void;
+  OnFileDropOff?(): void;
 }
 
 function getApp(): WailsGoApp | undefined {
@@ -707,6 +710,15 @@ export const bridge = {
     mockConfig.settings.collapsed_groups = [...ids];
   },
 
+  /** Extracts icons for items that have none and returns how many were written. */
+  async ensureIcons(): Promise<number> {
+    const app = getApp();
+    if (app) {
+      return await app.EnsureIcons();
+    }
+    return 0;
+  },
+
   /** Deletes icon files no item references and returns how many were removed. */
   async cleanupIcons(): Promise<number> {
     const app = getApp();
@@ -724,6 +736,15 @@ export const bridge = {
       return;
     }
     emitMockEvent('ui:toast', { type: 'success', message: '[Dev] 已重建 config.json' } satisfies ToastPayload);
+  },
+
+  /** Asks for a new target for an item whose file moved; resolves to "" when cancelled. */
+  async relocateItem(groupID: string, itemID: string): Promise<string> {
+    const app = getApp();
+    if (app) {
+      return await app.RelocateItem(groupID, itemID);
+    }
+    return '';
   },
 
   /** Opens an http(s) link in the system browser. */
@@ -773,7 +794,9 @@ export const bridge = {
         callback(paths);
       }
     }, false);
-    return () => undefined;
+    // Wails keeps the drop listeners on the app runtime, so they outlive the component unless the
+    // runtime is told to remove them.
+    return () => rt.OnFileDropOff?.();
   },
 
   eventsOn<T = unknown>(eventName: string, callback: (payload: T) => void): () => void {

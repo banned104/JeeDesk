@@ -298,6 +298,20 @@ func (m *MouseHookManager) stopLocked() {
 	m.workerDone = nil
 }
 
+// pressTrigger reports whether the button that just went down is the configured trigger, notifying
+// the worker, and returns the hook result (1 to swallow the input) plus whether it applied.
+func (m *MouseHookManager) pressTrigger(trigger, code int32, swallowed *atomic.Bool) (uintptr, bool) {
+	if trigger != code {
+		return 0, false
+	}
+	m.notifyTrigger()
+	if !m.swallowInput.Load() {
+		return 0, true
+	}
+	swallowed.Store(true)
+	return 1, true
+}
+
 func (m *MouseHookManager) resetState() {
 	m.swallowedMiddle.Store(false)
 	m.swallowedX1.Store(false)
@@ -315,13 +329,8 @@ func (m *MouseHookManager) lowLevelMouseProc(nCode uintptr, wParam uintptr, lPar
 
 		switch wParam {
 		case wmMButtonDown:
-			if trigger == triggerCodeMiddle {
-				m.notifyTrigger()
-				if m.swallowInput.Load() {
-					m.swallowedMiddle.Store(true)
-					return 1
-				}
-				return 0
+			if r, matched := m.pressTrigger(trigger, triggerCodeMiddle, &m.swallowedMiddle); matched {
+				return r
 			}
 		case wmMButtonUp:
 			if m.swallowedMiddle.Swap(false) {
@@ -331,21 +340,18 @@ func (m *MouseHookManager) lowLevelMouseProc(nCode uintptr, wParam uintptr, lPar
 			if lParam != nil {
 				msll := (*msllHookStruct)(lParam)
 				xb := uint16(msll.MouseData >> 16)
-				if xb == xButton1 && trigger == triggerCodeXButton1 {
-					m.notifyTrigger()
-					if m.swallowInput.Load() {
-						m.swallowedX1.Store(true)
-						return 1
-					}
-					return 0
+				var code int32
+				swallowed := &m.swallowedX2
+				switch xb {
+				case xButton1:
+					code, swallowed = triggerCodeXButton1, &m.swallowedX1
+				case xButton2:
+					code, swallowed = triggerCodeXButton2, &m.swallowedX2
+				default:
+					break
 				}
-				if xb == xButton2 && trigger == triggerCodeXButton2 {
-					m.notifyTrigger()
-					if m.swallowInput.Load() {
-						m.swallowedX2.Store(true)
-						return 1
-					}
-					return 0
+				if r, matched := m.pressTrigger(trigger, code, swallowed); matched {
+					return r
 				}
 			}
 		case wmXButtonUp:
@@ -400,6 +406,17 @@ func (m *MouseHookManager) startWatchdogLocked() {
 	}()
 }
 
+// detachWatchdogLocked stops the watchdog goroutine without waiting for it. Only the watchdog's
+// own rebuild path calls this: it runs on the goroutine being stopped, so a wait would block on
+// its own exit until the stop timeout while holding m.mu.
+func (m *MouseHookManager) detachWatchdogLocked() {
+	if m.watchdogStop != nil {
+		close(m.watchdogStop)
+	}
+	m.watchdogStop = nil
+	m.watchdogDone = nil
+}
+
 func (m *MouseHookManager) stopWatchdogLocked() {
 	if m.watchdogStop != nil {
 		close(m.watchdogStop)
@@ -410,6 +427,13 @@ func (m *MouseHookManager) stopWatchdogLocked() {
 	}
 	m.watchdogStop = nil
 	m.watchdogDone = nil
+}
+
+// inputAgeMillis reports how long ago the last system input happened. GetLastInputInfo reports a
+// 32-bit tick count while GetTickCount64 is 64-bit, so the subtraction has to wrap modulo 2^32;
+// subtracting the raw values directly broke the check after 49.7 days of uptime.
+func inputAgeMillis(now uint64, lastInput uint32) uint32 {
+	return uint32(now) - lastInput
 }
 
 // hookLooksDead reports true when the system has seen input recently but our
@@ -429,7 +453,7 @@ func (m *MouseHookManager) hookLooksDead() bool {
 		return false
 	}
 	const recentInput = 2500
-	if uint64(tick)-uint64(li.Time) > recentInput {
+	if inputAgeMillis(uint64(tick), li.Time) > recentInput {
 		return false // nobody is using the mouse, nothing to judge
 	}
 	last := m.lastEventTick.Load()
@@ -445,6 +469,7 @@ func (m *MouseHookManager) rebuildFromWatchdog() {
 	if !m.running || m.activeTrigger.Load() == triggerCodeNone {
 		return
 	}
+	m.detachWatchdogLocked()
 	m.stopLocked()
 	if err := m.startLocked(); err == nil {
 		m.rehookCount.Add(1)

@@ -38,7 +38,6 @@ var (
 	procRegisterClassExW      = modUser32.NewProc("RegisterClassExW")
 	procUnregisterClassW      = modUser32.NewProc("UnregisterClassW")
 	procCreateWindowExW       = modUser32.NewProc("CreateWindowExW")
-	procDestroyWindow         = modUser32.NewProc("DestroyWindow")
 	procDefWindowProcW        = modUser32.NewProc("DefWindowProcW")
 	procGetMessageW           = modUser32.NewProc("GetMessageW")
 	procTranslateMessage      = modUser32.NewProc("TranslateMessage")

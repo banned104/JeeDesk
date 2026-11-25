@@ -61,6 +61,11 @@ func LogPath(baseDir string) string {
 	return filepath.Join(baseDir, logDir, logName)
 }
 
+// PanicPath returns the file that keeps the last recovered panic for the next start.
+func PanicPath(baseDir string) string {
+	return filepath.Join(baseDir, logDir, "last-panic.txt")
+}
+
 // MarkerPath returns the file whose presence means the previous run never finished.
 func MarkerPath(baseDir string) string {
 	return filepath.Join(baseDir, logDir, marker)

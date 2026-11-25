@@ -56,6 +56,7 @@ registerTranslations({
   从开始菜单导入: 'Import from Start Menu',
   最近使用: 'Recent',
   清空最近使用: 'Clear recent',
+  '参数:': 'Arguments:',
   分组: 'Groups',
   没有匹配的项目: 'No matching items',
   还没有任何项目: 'No items yet',

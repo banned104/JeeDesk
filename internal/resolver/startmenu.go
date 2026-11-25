@@ -27,14 +27,20 @@ const (
 	maxStartMenuDepth = 4
 )
 
+// StartMenuRoot is one Start Menu program folder and the scope its entries belong to.
+type StartMenuRoot struct {
+	Dir   string
+	Scope string
+}
+
 // StartMenuDirs returns the existing Start Menu program folders, user first.
-func StartMenuDirs() []struct{ Dir, Scope string } {
-	candidates := []struct{ Dir, Scope string }{
+func StartMenuDirs() []StartMenuRoot {
+	candidates := []StartMenuRoot{
 		{filepath.Join(os.Getenv("APPDATA"), `Microsoft\Windows\Start Menu\Programs`), scopeUser},
 		{filepath.Join(os.Getenv("ProgramData"), `Microsoft\Windows\Start Menu\Programs`), scopeMachine},
 	}
 
-	out := make([]struct{ Dir, Scope string }, 0, len(candidates))
+	out := make([]StartMenuRoot, 0, len(candidates))
 	for _, candidate := range candidates {
 		if strings.TrimSpace(candidate.Dir) == "" {
 			continue

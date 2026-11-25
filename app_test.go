@@ -41,6 +41,13 @@ func newTestApp(t *testing.T) *App {
 	return app
 }
 
+// setConfigManager installs a config manager in tests without going through wails startup.
+func (a *App) setConfigManager(mgr *config.Manager) {
+	a.cfgMu.Lock()
+	a.cfgMgr = mgr
+	a.cfgMu.Unlock()
+}
+
 func TestAppGroupAndItemLifecycle(t *testing.T) {
 	app := newTestApp(t)
 
@@ -225,7 +232,7 @@ func TestIconMiddlewareSecurityAndServing(t *testing.T) {
 	}
 
 	fallbackCalled := false
-	mw := newIconMiddleware(iconsDir)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mw := newIconMiddleware(iconsDir, []string{dir})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fallbackCalled = true
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -641,6 +648,25 @@ func TestIsDevBinaryDir(t *testing.T) {
 	}
 }
 
+// TestDevLaunchHonoursWailsDevMarker keeps wails dev from being detected by temp paths alone: the
+// CLI sets assetdir for the process it launches.
+func TestDevLaunchHonoursWailsDevMarker(t *testing.T) {
+	t.Setenv("JEEDESK_DEV", "")
+	t.Setenv("assetdir", "")
+	if devLaunch() {
+		t.Fatal("expected an unmarked run not to count as development")
+	}
+	t.Setenv("assetdir", `F:\Codes\JeeDeskrontend\dist`)
+	if !devLaunch() {
+		t.Fatal("expected assetdir to mark a wails dev run")
+	}
+	t.Setenv("assetdir", "")
+	t.Setenv("JEEDESK_DEV", "1")
+	if !devLaunch() {
+		t.Fatal("expected JEEDESK_DEV=1 to mark a development run")
+	}
+}
+
 func TestPickBaseDirUsesWorkingDirInDev(t *testing.T) {
 	// A path outside the temp directory, so only the build/bin rule can mark it as development.
 	volume := filepath.VolumeName(t.TempDir()) + `\`
@@ -809,5 +835,95 @@ func TestLoadConfigKeepsManagerUsableWhenConfigBroken(t *testing.T) {
 	}
 	if !bytes.Equal(got, broken) {
 		t.Fatalf("broken config.json was overwritten:\n%s", got)
+	}
+}
+
+// Diagnostics: version comparison, missing targets, icon cache naming, instance names.
+
+func TestCompareVersions(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want int
+	}{
+		{"1.0.0", "1.0.0", 0},
+		{"v1.2.0", "1.1.9", 1},
+		{"1.0.0", "1.0.1", -1},
+		{"1.10", "1.9", 1},
+		{"2.0.0-beta.1", "2.0.0", 0},
+		{"", "0.0.1", -1},
+	}
+	for _, tc := range cases {
+		if got := compareVersions(tc.a, tc.b); got != tc.want {
+			t.Errorf("compareVersions(%q, %q) = %d, want %d", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
+func TestTargetExists(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "app.exe")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	if !targetExists(file) {
+		t.Errorf("targetExists(existing file) = false")
+	}
+	if targetExists(filepath.Join(dir, "missing.exe")) {
+		t.Errorf("targetExists(missing file) = true")
+	}
+	if !targetExists("https://example.com") {
+		t.Errorf("targetExists(uri) = false")
+	}
+	if targetExists("   ") {
+		t.Errorf("targetExists(blank) = true")
+	}
+}
+
+func TestIconBaseName(t *testing.T) {
+	cases := map[string]string{
+		"icons/abc.png":  "abc.png",
+		"icons/sub/a.p":  "a.p",
+		"C:/icons/x.png": "",
+		"":               "",
+	}
+	for in, want := range cases {
+		if got := iconBaseName(in); got != want {
+			t.Errorf("iconBaseName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestSingleInstanceNamesDependOnBaseDir(t *testing.T) {
+	mutexA, classA, windowA := SingleInstanceNames(`F:\Softwares\JeeDesk`)
+	mutexB, classB, windowB := SingleInstanceNames(`f:\softwares\jeedesk`)
+	if mutexA != mutexB || classA != classB || windowA != windowB {
+		t.Errorf("names should be case insensitive: %q/%q %q/%q %q/%q", mutexA, mutexB, classA, classB, windowA, windowB)
+	}
+
+	mutexC, _, _ := SingleInstanceNames(`F:\Portable\JeeDesk`)
+	if mutexA == mutexC {
+		t.Errorf("different data directories must not share a mutex name")
+	}
+}
+
+// TestCustomIconRootsRestrictServing keeps /custom-icon inside the data directory and the user's
+// profile: a crafted config.json must not turn the endpoint into a reader for other trees.
+func TestCustomIconRootsRestrictServing(t *testing.T) {
+	allowed := t.TempDir()
+	elsewhere := t.TempDir()
+	outside := filepath.Join(elsewhere, "pick.png")
+	if err := os.WriteFile(outside, []byte("\x89PNG\r\n\x1a\n"), 0o644); err != nil {
+		t.Fatalf("write png: %v", err)
+	}
+
+	if !pathWithinRoots(filepath.Join(allowed, "icons", "a.png"), []string{allowed}) {
+		t.Error("expected a file below the root to be allowed")
+	}
+	if pathWithinRoots(outside, []string{allowed}) {
+		t.Error("expected a file outside the roots to be rejected")
+	}
+	if pathWithinRoots(allowed+"-sibling", []string{allowed}) {
+		t.Error("expected a sibling directory with the same prefix to be rejected")
 	}
 }

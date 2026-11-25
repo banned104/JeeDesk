@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -387,8 +388,62 @@ func (a *App) UndoDeleteGroup() (string, error) {
 	return snapshot.group.Name, nil
 }
 
-// HasUndo reports whether an undo snapshot is available, so the UI can enable Ctrl+Z.
-func (a *App) HasUndo() string {
+// RelocateItem asks for a new target for an item whose file moved, then updates the path and the
+// icon that was derived from it. It returns the new path, or "" when the user cancelled.
+func (a *App) RelocateItem(groupID, itemID string) (string, error) {
+	ctx := a.context()
+	if ctx == nil {
+		return "", errors.New("窗口尚未就绪")
+	}
+	mgr := a.configManager()
+	if mgr == nil {
+		return "", errors.New("配置管理器尚未就绪")
+	}
+
+	item, ok := findItem(mgr.Get(), groupID, itemID)
+	if !ok {
+		return "", errors.New("项目不存在")
+	}
+
+	picked, err := runtime.OpenFileDialog(ctx, runtime.OpenDialogOptions{
+		Title:            "选择新的目标",
+		DefaultDirectory: filepath.Dir(item.Path),
+	})
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(picked) == "" {
+		return "", nil
+	}
+
+	if err := mgr.Update(func(cfg *config.Config) error {
+		gIdx := findGroupIndex(cfg.Groups, groupID)
+		if gIdx < 0 {
+			return errors.New("分组不存在")
+		}
+		items := cfg.Groups[gIdx].Items
+		for i := range items {
+			if items[i].ID != itemID {
+				continue
+			}
+			// Only a derived icon follows the new target; a custom icon is left alone.
+			if items[i].Icon == "" || strings.EqualFold(items[i].Icon, items[i].Path) {
+				items[i].Icon = picked
+			}
+			items[i].Path = picked
+			return nil
+		}
+		return errors.New("项目不存在")
+	}); err != nil {
+		return "", err
+	}
+
+	a.emitToast("success", "已更新目标路径")
+	return picked, nil
+}
+
+// pendingUndoLabel describes the undo snapshot that Ctrl+Z would apply, or "" when there is none.
+func (a *App) pendingUndoLabel() string {
 	a.undoMu.Lock()
 	defer a.undoMu.Unlock()
 	switch {
@@ -575,7 +630,7 @@ func (a *App) GetConfigError() string {
 
 // GetUndoLabel is kept for the frontend: it returns the pending undo description or "".
 func (a *App) GetUndoLabel() string {
-	label := a.HasUndo()
+	label := a.pendingUndoLabel()
 	if label == "" {
 		return ""
 	}

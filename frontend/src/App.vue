@@ -42,6 +42,11 @@ registerTranslations({
   分组上移: 'Move group up',
   分组下移: 'Move group down',
   删除分组: 'Delete group',
+  '更新路径…': 'Update target…',
+  '分组「{name}」包含 {count} 个项目，删除后可以按 Ctrl+Z 撤销。':
+    'Group "{name}" has {count} items. Press Ctrl+Z to undo the deletion.',
+  '确定删除分组「{name}」吗？可以按 Ctrl+Z 撤销。':
+    'Delete group "{name}"? Press Ctrl+Z to undo it.',
   未命名分组: 'Untitled group',
   '搜索失败: {error}': 'Search failed: {error}',
   '启动失败: {error}': 'Launch failed: {error}',
@@ -307,6 +312,10 @@ const contextMenuItems = computed<ContextMenuItem[]>(() => {
       { id: 'open-location', label: t('打开所在文件夹'), icon: 'folder' },
       { id: 'copy-path', label: t('复制目标路径') },
     ];
+    if (missingTargets.value.has(entry.item.id)) {
+      // The file moved or was renamed; picking the new target keeps the entry usable.
+      items.splice(2, 0, { id: 'relocate-item', label: t('更新路径…'), icon: 'folder' });
+    }
     if (entry.groupId === activeGroupId.value) {
       items.push({ id: 'move-up', label: t('上移') });
       items.push({ id: 'move-down', label: t('下移') });
@@ -391,11 +400,19 @@ function revealSelection(groupId: string, pendingItemId: string | null) {
   void gridRef.value?.ensureSelectionVisible();
 }
 
+/** iconSignature changes only when an item's icon does, so unrelated edits keep the cache URLs. */
+function iconSignature(groups: Group[]): string {
+  return groups.map((group) => group.items.map((item) => item.id + ':' + item.icon).join(',')).join('|');
+}
+
 function applyConfig(next: Config) {
   const settings = { ...defaultSettings, ...next.settings };
   config.settings = settings;
-  config.groups = Array.isArray(next.groups) ? next.groups : [];
-  iconCacheBuster.value = Date.now();
+  const nextGroups = Array.isArray(next.groups) ? next.groups : [];
+  if (iconSignature(nextGroups) !== iconSignature(config.groups)) {
+    iconCacheBuster.value = Date.now();
+  }
+  config.groups = nextGroups;
   configError.value = '';
   // The file exists again (or was never the problem) once a usable config arrives.
   configRemoved.value = false;
@@ -626,6 +643,15 @@ async function handleContextMenuSelect(actionId: string) {
       return;
     }
 
+    if (actionId === 'relocate-item' && entry) {
+      const picked = await bridge.relocateItem(entry.groupId, entry.item.id);
+      if (picked) {
+        missingTargetsSignature = '';
+        void refreshMissingTargets();
+      }
+      return;
+    }
+
     if (actionId === 'copy-path' && entry) {
       await navigator.clipboard.writeText(entry.item.path);
       showToast({ type: 'success', message: t('已复制目标路径') });
@@ -714,6 +740,8 @@ function revealItems(groupId: string) {
   // consumed by applyConfig once the new list is in.
   pendingRevealGroupId = groupId;
   revealPendingItemId = null;
+  // A new item is invisible under an active filter; clearing it shows what was just added.
+  searchQuery.value = '';
   const existing = config.groups.find((g) => g.id === groupId);
   revealBaselineIds = new Set(existing?.items.map((item) => item.id) ?? []);
   void nextTick(() => {
@@ -1238,6 +1266,8 @@ onMounted(async () => {
     }),
     bridge.eventsOn('window:shown', () => {
       selectedIndex.value = 0;
+      // The panel is a launcher: reopening it should start from the unfiltered grid.
+      searchQuery.value = '';
       // A dialog that survived the window being hidden keeps the focus; stealing it would pull the
       // caret out of the form the user was in the middle of filling.
       if (!anyModalOpen.value) {

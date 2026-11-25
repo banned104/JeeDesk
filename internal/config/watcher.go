@@ -70,6 +70,8 @@ type Manager struct {
 	watcher *fsnotify.Watcher
 	stopCh  chan struct{}
 	doneCh  chan struct{}
+	// closed records that Close ran, so a pending restart cannot resurrect the watcher.
+	closed bool
 }
 
 // NewManager loads or creates the config file at configPath and initializes a Manager.
@@ -298,6 +300,9 @@ func (m *Manager) StartWatching() error {
 	m.watchMu.Lock()
 	defer m.watchMu.Unlock()
 
+	if m.closed {
+		return errors.New("config watch: manager closed")
+	}
 	if m.watcher != nil {
 		return nil
 	}
@@ -326,6 +331,7 @@ func (m *Manager) StartWatching() error {
 // Close stops the debounce timer and closes the filesystem watcher cleanly.
 func (m *Manager) Close() error {
 	m.watchMu.Lock()
+	m.closed = true
 	watcher := m.watcher
 	stopCh := m.stopCh
 	doneCh := m.doneCh
@@ -344,7 +350,10 @@ func (m *Manager) Close() error {
 	}
 
 	if doneCh != nil {
-		<-doneCh
+		select {
+		case <-doneCh:
+		case <-time.After(watchRestartDelay + watchDebounceDelay):
+		}
 	}
 
 	return closeErr
@@ -389,7 +398,8 @@ func (m *Manager) watchLoop(watcher *fsnotify.Watcher, stopCh <-chan struct{}, d
 			return
 		case event, ok := <-watcher.Events:
 			if !ok {
-				m.restartWatching()
+				// Restart off the loop goroutine: retrying here would make Close wait for it.
+				go m.restartWatching()
 				return
 			}
 			if isConfigRemoval(event, targetBase) {
@@ -443,6 +453,12 @@ func (m *Manager) watchLoop(watcher *fsnotify.Watcher, stopCh <-chan struct{}, d
 func (m *Manager) restartWatching() {
 	for attempt := 0; attempt < watchRestartRetries; attempt++ {
 		time.Sleep(watchRestartDelay)
+		m.watchMu.Lock()
+		closed := m.closed
+		m.watchMu.Unlock()
+		if closed {
+			return
+		}
 		if err := m.reopenWatcher(); err == nil {
 			return
 		}
@@ -452,6 +468,10 @@ func (m *Manager) restartWatching() {
 
 func (m *Manager) reopenWatcher() error {
 	m.watchMu.Lock()
+	if m.closed {
+		m.watchMu.Unlock()
+		return errors.New("config watch: manager closed")
+	}
 	m.watcher = nil
 	m.stopCh = nil
 	m.doneCh = nil

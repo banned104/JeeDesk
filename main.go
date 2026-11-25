@@ -92,7 +92,7 @@ func main() {
 		BackgroundColour: &options.RGBA{R: 18, G: 22, B: 32, A: 0},
 		AssetServer: &assetserver.Options{
 			Assets:     assets,
-			Middleware: newIconMiddleware(app.iconsDir, customIconRoots(baseDir)),
+			Middleware: newIconMiddleware(app.iconsDir, app.customIconRoots),
 		},
 		DragAndDrop: &options.DragAndDrop{
 			EnableFileDrop:     true,
@@ -268,13 +268,25 @@ var allowedCustomIconExts = map[string]bool{
 	".ico":  true,
 }
 
-// customIconRoots are the only trees the custom icon endpoint reads from: the data directory and
-// the user's profile. A crafted config.json cannot make JeeDesk serve images from %WINDIR% or from
-// another account's folder.
-func customIconRoots(baseDir string) []string {
-	roots := []string{baseDir}
+// customIconRoots are the only trees the custom icon endpoint reads from: the data directory, the
+// user's profile, and the folders configured items point at. Item icons are extracted from those
+// targets, so a portable config on D: keeps working without opening the whole disk to the endpoint.
+func (a *App) customIconRoots() []string {
+	roots := []string{a.baseDir}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		roots = append(roots, home)
+	}
+	for _, group := range a.GetConfig().Groups {
+		for _, item := range group.Items {
+			if dir := filepath.Dir(strings.TrimSpace(item.Path)); dir != "" && dir != "." {
+				roots = append(roots, dir)
+			}
+			if icon := strings.TrimSpace(item.Icon); icon != "" && !strings.HasPrefix(icon, "icons/") {
+				if dir := filepath.Dir(icon); dir != "" && dir != "." {
+					roots = append(roots, dir)
+				}
+			}
+		}
 	}
 	return roots
 }
@@ -296,7 +308,7 @@ func pathWithinRoots(path string, roots []string) bool {
 
 // newIconMiddleware serves cached icons from /icons/<file> and user-specified
 // custom icons from /custom-icon?path=<encoded-path>.
-func newIconMiddleware(iconsDir string, customRoots []string) assetserver.Middleware {
+func newIconMiddleware(iconsDir string, customRoots func() []string) assetserver.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
@@ -304,7 +316,7 @@ func newIconMiddleware(iconsDir string, customRoots []string) assetserver.Middle
 				serveCachedIcon(w, r, iconsDir)
 				return
 			case r.URL.Path == "/custom-icon":
-				serveCustomIcon(w, r, iconsDir, customRoots)
+				serveCustomIcon(w, r, iconsDir, customRoots())
 				return
 			default:
 				next.ServeHTTP(w, r)
@@ -362,35 +374,26 @@ func serveCustomIcon(w http.ResponseWriter, r *http.Request, iconsDir string, cu
 	cleaned := filepath.Clean(rawPath)
 	ext := strings.ToLower(filepath.Ext(cleaned))
 
-	// If user points custom icon to an executable/dll, extract & serve its cached PNG.
-	if ext == ".exe" || ext == ".dll" {
-		relIcon, err := resolver.ExtractAndCacheIcon(cleaned, iconsDir)
-		if err != nil {
-			http.NotFound(w, r)
+	// An image the user picked as an icon is served as-is.
+	if allowedCustomIconExts[ext] {
+		if info, err := os.Stat(cleaned); err == nil && !info.IsDir() {
+			w.Header().Set("Cache-Control", "no-cache")
+			if ct := mime.TypeByExtension(ext); ct != "" {
+				w.Header().Set("Content-Type", ct)
+			}
+			http.ServeFile(w, r, cleaned)
 			return
 		}
-		filename := filepath.Base(relIcon)
-		fullPath := filepath.Join(iconsDir, filename)
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Content-Type", "image/png")
-		http.ServeFile(w, r, fullPath)
-		return
 	}
 
-	if !allowedCustomIconExts[ext] {
-		http.Error(w, "unsupported icon format", http.StatusForbidden)
-		return
-	}
-
-	info, err := os.Stat(cleaned)
-	if err != nil || info.IsDir() {
+	// Everything else is a launch target: .exe, .dll, .bat, .lnk, .html, a folder or a path
+	// without an extension. Those get the same shell icon Explorer would show, cached as PNG.
+	relIcon, err := resolver.ExtractAndCacheIcon(cleaned, iconsDir)
+	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-
 	w.Header().Set("Cache-Control", "no-cache")
-	if ct := mime.TypeByExtension(ext); ct != "" {
-		w.Header().Set("Content-Type", ct)
-	}
-	http.ServeFile(w, r, cleaned)
+	w.Header().Set("Content-Type", "image/png")
+	http.ServeFile(w, r, filepath.Join(iconsDir, filepath.Base(relIcon)))
 }

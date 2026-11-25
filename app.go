@@ -258,6 +258,10 @@ func (a *App) startup(ctx context.Context) {
 	// Missing icons are filled in and orphans are removed in the background: both touch the disk
 	// and must not delay the first paint. Filling runs first so cleanup cannot drop a fresh file.
 	go func() {
+		// Cached PNGs are keyed by target path, so a better extractor has to invalidate them once.
+		if err := a.syncIconCacheVersion(); err != nil {
+			log.Printf("[icons] cache version sync failed: %v", err)
+		}
 		if filled, err := a.EnsureIcons(); err != nil {
 			log.Printf("[icons] backfill failed: %v", err)
 		} else if filled > 0 {

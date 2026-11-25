@@ -166,6 +166,42 @@ func (a *App) EnsureIcons() (int, error) {
 	return len(filled), nil
 }
 
+// iconCacheVersion is bumped whenever icon extraction changes in a way that makes previously
+// written PNGs wrong (a new strategy, a fixed conversion). Cached files from another version are
+// dropped once at startup so nobody keeps staring at a blank icon.
+const iconCacheVersion = "2"
+
+// syncIconCacheVersion drops cached icons written by an older extractor.
+func (a *App) syncIconCacheVersion() error {
+	marker := filepath.Join(a.iconsDir, ".version")
+	if data, err := os.ReadFile(marker); err == nil && strings.TrimSpace(string(data)) == iconCacheVersion {
+		return nil
+	}
+	entries, err := os.ReadDir(a.iconsDir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	removed := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".png") {
+			continue
+		}
+		if err := os.Remove(filepath.Join(a.iconsDir, entry.Name())); err == nil {
+			removed++
+		}
+	}
+	if err := os.MkdirAll(a.iconsDir, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(marker, []byte(iconCacheVersion), 0o644); err != nil {
+		return err
+	}
+	if removed > 0 {
+		log.Printf("[icons] dropped %d cached icons from an older extractor", removed)
+	}
+	return nil
+}
+
 // CleanupIcons deletes cached icons that no item references any more and returns how many files
 // were removed. Icons younger than orphanIconAge are kept, because they may belong to an item that
 // is still being added.

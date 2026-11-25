@@ -128,13 +128,7 @@ func ExtractAndCacheIcon(targetPath string, iconsDir string) (string, error) {
 		}
 	}
 
-	hIcon, err := extractWin32Icon(cleanedTarget)
-	if err != nil {
-		return "", err
-	}
-	defer destroyIcon(hIcon)
-
-	img, err := hiconToNRGBA(hIcon)
+	img, err := extractIconImage(cleanedTarget)
 	if err != nil {
 		return "", err
 	}
@@ -146,34 +140,67 @@ func ExtractAndCacheIcon(targetPath string, iconsDir string) (string, error) {
 	return "icons/" + filename, nil
 }
 
-func extractWin32Icon(targetPath string) (uintptr, error) {
+// extractIconImage returns the first usable icon for targetPath. Explorer's own strategies are
+// tried in order and a blank result is rejected, because some executables hand out an empty 48px
+// icon from PrivateExtractIcons while still having a valid one through ExtractIconEx or the shell.
+func extractIconImage(targetPath string) (*image.NRGBA, error) {
 	pathPtr, err := windows.UTF16PtrFromString(targetPath)
 	if err != nil {
-		return 0, fmt.Errorf("encode target path: %w", err)
+		return nil, fmt.Errorf("encode target path: %w", err)
 	}
 
+	strategies := make([]func() uintptr, 0, 4)
 	ext := strings.ToLower(filepath.Ext(targetPath))
 	if ext == ".exe" || ext == ".dll" || ext == ".ico" {
-		if hIcon := privateExtractIcon48(pathPtr); hIcon != 0 {
-			return hIcon, nil
-		}
-		if hIcon := extractLargeIconEx(pathPtr); hIcon != 0 {
-			return hIcon, nil
-		}
+		strategies = append(strategies,
+			func() uintptr { return privateExtractIcon48(pathPtr) },
+			func() uintptr { return extractLargeIconEx(pathPtr) },
+		)
 	}
-
-	if hIcon := shGetFileIcon(pathPtr, 0, shgfiIcon|shgfiLargeIcon); hIcon != 0 {
-		return hIcon, nil
-	}
-
-	// Fallback for non-existent paths using extension association.
+	strategies = append(strategies, func() uintptr { return shGetFileIcon(pathPtr, 0, shgfiIcon|shgfiLargeIcon) })
 	if !pathExists(targetPath) {
-		if hIcon := shGetFileIcon(pathPtr, fileAttributeNormal, shgfiIcon|shgfiLargeIcon|shgfiUseFileAttributes); hIcon != 0 {
-			return hIcon, nil
-		}
+		// Missing target: ask the shell for the icon of its type instead of the file itself.
+		strategies = append(strategies, func() uintptr {
+			return shGetFileIcon(pathPtr, fileAttributeNormal, shgfiIcon|shgfiLargeIcon|shgfiUseFileAttributes)
+		})
 	}
 
-	return 0, fmt.Errorf("failed to extract icon for %q", targetPath)
+	var lastErr error
+	for _, next := range strategies {
+		hIcon := next()
+		if hIcon == 0 {
+			continue
+		}
+		img, convErr := hiconToNRGBA(hIcon)
+		destroyIcon(hIcon)
+		if convErr != nil {
+			lastErr = convErr
+			continue
+		}
+		if !imageHasContent(img) {
+			lastErr = fmt.Errorf("icon for %q is blank", targetPath)
+			continue
+		}
+		return img, nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("failed to extract icon for %q", targetPath)
+}
+
+// imageHasContent reports whether an icon has at least one visible pixel, which rejects the fully
+// transparent placeholders some applications ship.
+func imageHasContent(img *image.NRGBA) bool {
+	if img == nil {
+		return false
+	}
+	for i := 3; i < len(img.Pix); i += 4 {
+		if img.Pix[i] > 8 {
+			return true
+		}
+	}
+	return false
 }
 
 func privateExtractIcon48(pathPtr *uint16) uintptr {

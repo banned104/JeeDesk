@@ -232,7 +232,7 @@ func TestIconMiddlewareSecurityAndServing(t *testing.T) {
 	}
 
 	fallbackCalled := false
-	mw := newIconMiddleware(iconsDir, []string{dir})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mw := newIconMiddleware(iconsDir, func() []string { return []string{dir} })(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fallbackCalled = true
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -258,11 +258,17 @@ func TestIconMiddlewareSecurityAndServing(t *testing.T) {
 		t.Fatalf("expected 200 for custom ico, got %d", rec.Code)
 	}
 
-	// 4. Non-image custom icon forbidden.
+	// 4. A non-image target is a launch target: its shell icon is extracted, never its bytes.
 	rec = httptest.NewRecorder()
 	mw.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/custom-icon?path="+url.QueryEscape(secretFile), nil))
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("expected 403 for non-image custom icon, got %d", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected the shell icon of a non-image target, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "image/png" {
+		t.Fatalf("expected image/png for an extracted icon, got %q", ct)
+	}
+	if bytes.Contains(rec.Body.Bytes(), []byte("secret")) {
+		t.Fatal("icon endpoint leaked the file contents")
 	}
 
 	// 5. Normal asset passes through to next handler.
@@ -925,5 +931,76 @@ func TestCustomIconRootsRestrictServing(t *testing.T) {
 	}
 	if pathWithinRoots(allowed+"-sibling", []string{allowed}) {
 		t.Error("expected a sibling directory with the same prefix to be rejected")
+	}
+}
+
+// TestCustomIconRootsCoverConfiguredItems keeps item icons working outside the data directory: an
+// item living on D:\ must still be reachable, otherwise every such entry falls back to a generic
+// icon.
+func TestCustomIconRootsCoverConfiguredItems(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	mgr, err := config.NewManager(cfgPath, nil, nil)
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer mgr.Close()
+
+	app := &App{baseDir: dir, configPath: cfgPath, iconsDir: filepath.Join(dir, "icons")}
+	app.setConfigManager(mgr)
+
+	target := filepath.Join(t.TempDir(), "portable", "app.exe")
+	if err := mgr.Update(func(c *config.Config) error {
+		c.Groups = []config.Group{{
+			ID:    "g",
+			Name:  "g",
+			Items: []config.Item{{ID: "i", Name: "app", Path: target, Icon: target}},
+		}}
+		return nil
+	}); err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+
+	if !pathWithinRoots(target, app.customIconRoots()) {
+		t.Fatalf("expected %q to be reachable through the item's own folder", target)
+	}
+	// A path on the volume root is outside both the data directory and the user profile.
+	outside := filepath.Join(string(filepath.Separator), "JeeDeskRootsProbe", "unrelated.png")
+	if pathWithinRoots(outside, app.customIconRoots()) {
+		t.Fatalf("expected %q to stay blocked", outside)
+	}
+}
+
+// TestSyncIconCacheVersionDropsStaleIcons makes a fixed extractor visible: cached PNGs written by
+// an older version have to go, otherwise the old blank icon stays on screen forever.
+func TestSyncIconCacheVersionDropsStaleIcons(t *testing.T) {
+	dir := t.TempDir()
+	iconsDir := filepath.Join(dir, "icons")
+	if err := os.MkdirAll(iconsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	stale := filepath.Join(iconsDir, "abc.png")
+	if err := os.WriteFile(stale, []byte("old"), 0o644); err != nil {
+		t.Fatalf("write stale icon: %v", err)
+	}
+
+	app := &App{baseDir: dir, iconsDir: iconsDir}
+	if err := app.syncIconCacheVersion(); err != nil {
+		t.Fatalf("syncIconCacheVersion failed: %v", err)
+	}
+	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected the stale icon to be removed, got %v", err)
+	}
+
+	// A fresh icon written under the current version survives the next start.
+	fresh := filepath.Join(iconsDir, "fresh.png")
+	if err := os.WriteFile(fresh, []byte("new"), 0o644); err != nil {
+		t.Fatalf("write fresh icon: %v", err)
+	}
+	if err := app.syncIconCacheVersion(); err != nil {
+		t.Fatalf("second sync failed: %v", err)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Fatalf("expected the current-version icon to survive: %v", err)
 	}
 }

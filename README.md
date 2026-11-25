@@ -18,7 +18,7 @@
   <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?logo=windows11&logoColor=white" alt="Windows 10 / 11">
 </p>
 
-> 🥚 感谢 **欧公子** 与 **MistralAI** 送来的赛博鸡蛋。
+> 🥚 感谢 **欧公子**、**MistralAI** 送来的赛博鸡蛋。
 
 ## 它是什么
 

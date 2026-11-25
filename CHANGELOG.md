@@ -32,7 +32,8 @@
 - 启动时把日志写入 `<baseDir>/logs/app.log`（超过 2 MiB 轮转为 `.1`），设置页与托盘都能打开日志。
 - 异常退出检测：`logs/.running` 标记在正常退出时删除，下次启动若发现残留则提示「上次没有正常退出」。
 - 图标缓存按目标路径哈希命名，命中即复用；启动时补齐缺失图标，并清理无人引用的孤儿 PNG。
-- 失效目标检测：目标文件不存在的条目在网格里显示警示点。
+- 失效目标检测：目标文件不存在的条目在网格里显示警示点；右键可直接「更新路径…」
+  （`App.RelocateItem`，弹出文件选择框并同步路径与派生图标）。
 - 同一份 `config.json` 只允许一个实例；单实例名由数据目录哈希派生，因此便携副本可以与安装版并存。
   旧版本使用的固定互斥体名仍会检查，升级后不会与旧进程同时运行。
 
@@ -48,8 +49,14 @@
   现在 DOM 就绪后显式隐藏一次，用户主动打开时不会再被隐藏。
 - 删除/改名 `config.json` 后界面显示可操作横幅（重建文件、打开数据目录），不再静默。
 - 鼠标呼出取值非法时回退到 `none`，并在界面提示原始值。
-- 自定义图标接口只接受本地绝对路径，拒绝 UNC 与设备路径。
+- 自定义图标接口只接受本地绝对路径，拒绝 UNC 与设备路径；并且只从数据目录与当前用户
+  配置目录读取，`config.json` 无法让它读取 `%WINDIR%` 或别人的目录。
 - 管理员项目只启动一次：此前 `LaunchItem` 先按普通进程启动再提权，会留下一个未提权的副本。
+- 鼠标钩子的看门狗不再自我阻塞：以前重建时会在持锁状态下等待自己退出，每次重建卡 2 秒；
+  同时死钩判定改用取模比较，开机超过 49.7 天后不再失效（补 `inputAgeMillis` 单测）。
+- 配置监听在 `Close()` 之后不会再被重启唤醒，`Close()` 也不再无限等待循环退出。
+- 面板重新显示时会重新应用鼠标触发，Windows 在面板隐藏期间摘掉的钩子能自愈；
+  隐藏时补发 `window:hidden` 事件。
 - 图标缓存按目标修改时间校验，命中缓存但目标已被替换时重新提取，不再显示旧图标。
 - 数据目录不可写时回退到 `%LOCALAPPDATA%\JeeDesk`，避免启动即失败。
 - 「清理图标缓存」在配置读取失败或没有任何分组时跳过，不会清掉仍被引用的图标。
@@ -70,10 +77,15 @@
 - 严格失焦隐藏（`settings.hide_on_blur_strict`）：光标停在面板上也随失焦隐藏。
 - 分组折叠状态持久化（`settings.collapsed_groups`），侧栏可逐组折叠。
 - 删除分组、清理图标等不可逆操作统一走 `ConfirmDialog`，不再使用浏览器 `confirm`。
+- 设置页新增「补齐缺失图标」，与「清理图标缓存」并列。
 - 顶栏品牌角标与 `JeeDesk.exe` 图标同源（`build/appicon.png` 系列）。
 
 #### 修复
 
+- 面板重新显示时清空搜索框并回到未过滤的网格；新增、拖入或导入条目会退出搜索态，
+  避免新条目被过滤条件藏起来。
+- `config:updated` 只有在条目图标真的变化时才刷新图标 URL（`App.vue` 的 `iconSignature`）。
+- 组件卸载时调用 Wails 的 `OnFileDropOff()`，不再把拖放监听留在运行时里。
 - 弹窗具备 `role="dialog"`/`aria-modal`/焦点捕获与关闭后焦点归位；Toast 容器 `aria-live`；
   纯图标按钮补 `aria-label`；错误与路径文本可选中复制。
 - 右键菜单在滚动与窗口大小变化时关闭。
@@ -90,10 +102,11 @@
   `Item` 新增 `admin`。`frontend/src/types/config.ts` 与 `bridge.ts` 已同步。
 - 托盘图标改为与窗口、可执行文件一致的刀形标（内嵌 32×32 ICO），托盘菜单新增
   「打开数据目录」「查看日志」。
-- `JEEDESK_BASE_DIR` 可覆盖数据目录，`JEEDESK_DEV=1` 显式声明开发运行；`--silent`
+- `JEEDESK_BASE_DIR` 可覆盖数据目录，`JEEDESK_DEV=1` 显式声明开发运行；`wails dev` 通过
+  Wails 设置的 `assetdir` 变量被直接识别，不再只靠二进制路径位于 `%TEMP%` 猜测；`--silent`
   启动时不显示面板（供开机自启使用）。
 - 新增绑定方法 `App.OpenURL`（只允许 http/https）、`App.SetItemAdmin`、
-  `App.CheckUpdates`、`App.EnsureIcons`、`App.SetModalOpen`、`App.HasUndo`；
+  `App.CheckUpdates`、`App.EnsureIcons`、`App.SetModalOpen`、`App.RelocateItem`；
   `frontend/src/api/bridge.ts` 的 `WailsGoApp` 与 `frontend/src/types/config.ts` 已同步。
 - 设置保存不再接受前端传来的窗口几何：窗口位置由 `App.WindowPositioned` 在后端记录，
   前端无法覆盖内存中的几何值。

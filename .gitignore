@@ -1,6 +1,10 @@
 # Runtime generated files
 config.json
+config.json.bak
 icons/
+usage.json
+logs/
+webview/
 
 # Build outputs
 build/bin/

@@ -75,10 +75,17 @@ JeeDesk 是一个常驻托盘的小启动面板：按一下全局快捷键（默
 
 ## 配置与运行数据
 
-- `config.json`：设置 + 分组。字段见 `internal/config/schema.go`
-  （`settings`：`hotkey` / `mouse_trigger` / `hide_on_launch` / `hide_on_blur` / `hide_on_esc`；
-  `groups[]`：`id`、`name`、`items[]`（`id`、`name`、`path`、`args`、`work_dir`、`icon`））。
-- `icons/`：图标磁盘缓存（见下节）。两者均被 `.gitignore` 忽略。
+- `config.json`：设置 + 分组，字段以 `internal/config/schema.go` 为准。`settings` 包含
+  呼出与隐藏（`hotkey`、`mouse_trigger`、`mouse_swallow`、`hide_on_launch`、`hide_on_blur`、
+  `hide_on_blur_strict`、`hide_on_esc`）、启动（`auto_start`、`start_hidden`）、外观
+  （`theme`、`language`、`font_scale`、`window_opacity`、`window_width/height`、
+  `window_x/y`、`window_positioned`）、交互（`click_mode`、`show_recent`、`collapsed_groups`）；
+  `groups[]` 是 `id`、`name`、`items[]`，条目字段为 `id`、`name`、`path`、`args`、
+  `work_dir`、`icon`、`admin`。
+- 同目录的 `config.json.bak`（上一次保存的内容）、`icons/`（图标缓存）、`usage.json`
+  （启动次数与最近使用）、`logs/app.log`（超过 2 MiB 轮转为 `.1`，`logs/.running` 是异常退出
+  标记）、`webview/`（WebView2 用户数据目录）都由运行时生成，全部被 `.gitignore` 忽略。
+  便携使用时把整个目录一起拷走即可。
 - 运行目录由 `resolveBaseDir` 决定：本仓库内开发时（`go run`、`wails dev`）是当前工作目录；
   其他情况下，当前工作目录已有属于 JeeDesk 的 `config.json` 就用它，否则用可执行文件所在目录。
   **把 `JeeDesk.exe` 与 `config.json` 放任意目录（双击或快捷方式启动）即可携带数据**；

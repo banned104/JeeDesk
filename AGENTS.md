@@ -14,25 +14,33 @@
 | --- | --- |
 | `main.go` | Wails 装配、运行目录判定（`resolveBaseDir`）、图标资源中间件 |
 | `app.go` | `App`：Wails 绑定方法、窗口显隐与失焦隐藏、配置与钩子状态 |
+| `app_features.go` | `App` 的第二批绑定：搜索、最近使用、移动排序、撤销、开始菜单导入、配置导入导出 |
+| `app_diagnostics.go` | `App` 的诊断类绑定：失效目标、图标补齐与清理、日志、检查更新、`OpenURL` |
+| `app_test.go` | 根包（`package main`）唯一测试文件；Go 只允许测试与被测包同目录，新增根包测试也写在这里 |
 | `single_instance.go`、`win_helpers.go` | 单实例互斥与唤醒、Win32 窗口辅助 |
+| `internal/applog` | 日志初始化、轮转、异常退出标记与 panic 记录 |
+| `internal/autostart` | `HKCU\Run` 开机自启 |
 | `internal/config` | `config.json` 结构、原子读写与热更新监听 |
 | `internal/hook` | 全局快捷键与鼠标触发钩子 |
 | `internal/launcher` | 启动目标、打开文件与所在位置 |
 | `internal/resolver` | 拖入路径与 `.lnk` 解析、图标提取与缓存 |
+| `internal/search` | 跨分组搜索的评分与排序 |
 | `internal/tray` | 系统托盘与内置图标数据 |
+| `internal/usage` | `usage.json`：启动次数与最近使用 |
 | `frontend/src` | Vue 界面。`api/bridge.ts` 封装后端调用：自行声明 `WailsGoApp` 接口并直接访问 `window.go.main.App`，同时内置脱离 Wails 在浏览器中开发用的 mock |
 | `frontend/wailsjs` | Wails 构建时自动生成并纳入版本管理，不手工编辑；前端源码不引用它 |
 
-运行时数据是 `config.json`、`config.json.bak`、`icons/` 图标缓存、`usage.json`（启动次数与最近使用）
-与 `logs/app.log`（超过 2 MiB 轮转为 `.1`，`logs/.running` 是异常退出标记），目录由
+运行时数据是 `config.json`、`config.json.bak`、`icons/` 图标缓存、`usage.json`（启动次数与最近使用）、
+`logs/app.log`（超过 2 MiB 轮转为 `.1`，`logs/.running` 是异常退出标记）与 `webview/`
+（WebView2 用户数据目录），目录由
 `resolveBaseDir`（`main.go`）决定：
 开发运行（`go run`、`wails dev`）时是当前工作目录；其他情况下，当前工作目录已有属于 JeeDesk 的
 `config.json`（或一个无法解析的同名文件）时用它，否则用可执行文件所在目录。
-两者均被 `.gitignore` 忽略。磁盘上的 `config.json` 无法读取或解析期间，应用不会写入它。
+这些都列在 `.gitignore` 里。磁盘上的 `config.json` 无法读取或解析期间，应用不会写入它。
 
 `JEEDESK_BASE_DIR` 可覆盖数据目录，`JEEDESK_DEV=1` 显式声明开发运行（无需靠二进制路径猜测）。
 新增的 `App` 绑定（搜索、最近使用、移动排序、撤销、开始菜单导入、配置导入导出、
-`SetModalOpen`、`GetMissingTargets`、`CleanupIcons`、`CheckUpdates` 等）同样必须同步
+`SetModalOpen`、`GetMissingTargets`、`CleanupIcons`、`EnsureIcons`、`CheckUpdates` 等）同样必须同步
 `frontend/src/api/bridge.ts`；`frontend/wailsjs` 由 `wails build` / `wails generate module` 生成。
 前端文案通过 `frontend/src/i18n.ts` 的 `t()` 与组件内的 `registerTranslations` 提供英文，
 新增中文文案时同时补英文。
@@ -57,7 +65,7 @@
 | 分支 | 主分支 `main`（2026-11-24 初始化）；任务分支与 Commit 沿用 Skill 默认。 |
 | 版本 | 唯一现有来源是 `build/windows/info.json`（`fixed.file_version` 与 `info.ProductVersion`，均为 `1.0.0`），`wails build` 用它生成可执行文件的版本资源。`wails.json` 未配置 `info.productVersion`，`frontend/package.json` 的 `version` 只属于前端包。尚无正式发布、Tag 与兼容性政策：普通任务不改版本，发布时按 Skill 先确认约定。 |
 | CHANGELOG | 根目录 `CHANGELOG.md`，目前只有「开发中」区域，按「维护主题 → 变化类型 → 条目」维护，尚无正式版本章节。 |
-| 债务 | 根目录 `TODO.md`（Skill 默认），出现已确认债务时创建，目前不存在。 |
+| 债务 | 根目录 `TODO.md`（Skill 默认），记录已确认的遗留问题；目前存在，内容以文件为准。 |
 | 任务记录 | 见[复杂任务记录与归档](#复杂任务记录与归档)。 |
 | 正式文档 | `README.md`（项目介绍、构建、配置与图标机制、GeekDesk 迁移概要）、`docs/geekdesk-migration.md`（迁移详细过程）。事实以代码为准：配置结构见 `internal/config/schema.go`；后端绑定见 `app.go` 的导出方法与 `frontend/src/api/bridge.ts` 的 `WailsGoApp` 接口。 |
 | 发布与运行 | 目标环境是 Windows 桌面会话。远程仓库是 `origin`（`https://github.com/banned104/JeeDesk.git`，2026-11-24 添加），没有 CI 和发布流程。Push、Tag、Release、部署按 Skill 需用户明确授权；推送前先过一遍[不上传的本地内容](#不上传的本地内容)。 |

@@ -66,6 +66,15 @@ const dropSlot = ref(-1);
 const dragOffsetY = ref(0);
 const settling = ref(false);
 let settleTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Geometry is captured when the drag starts: the rows below move while dragging, so measuring them
+// live would make the drop slot chase its own animation. Tops are page coordinates at the start,
+// corrected by how far the list has scrolled since.
+let dragIndex = -1;
+let dragSpan = 40;
+let dragRowHeight = 36;
+let dragTops: number[] = [];
+let dragStartScroll = 0;
 let pressTimer: ReturnType<typeof setTimeout> | null = null;
 let pressOrigin = { x: 0, y: 0 };
 let suppressClick = false;
@@ -88,12 +97,36 @@ function rowLiftClass(groupId: string): string[] {
     'shadow-[0_14px_30px_-8px_rgba(0,0,0,0.65)]',
     'ring-1',
     'ring-sky-300/40',
-    'duration-150',
-    'ease-out',
-    settling.value
-      ? 'transition-[translate,scale,box-shadow]'
-      : 'transition-[scale,box-shadow]',
   ];
+}
+
+const LIFT_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)';
+const DRAG_TRANSITION_MS = 150;
+
+/**
+ * rowStyle carries the motion: the lifted row tracks the pointer through `translate` with no
+ * transition, while `scale`/`box-shadow` ease in so it reads as picked up. Rows that make room
+ * transition their own `translate`, which is the push-apart effect.
+ */
+function rowStyle(groupId: string, index: number): Record<string, string> | undefined {
+  if (dragGroupId.value === groupId) {
+    return {
+      translate: `0 ${dragOffsetY.value}px`,
+      transitionProperty: settling.value ? 'translate, scale, box-shadow' : 'scale, box-shadow',
+      transitionDuration: `${DRAG_TRANSITION_MS}ms`,
+      transitionTimingFunction: LIFT_EASING,
+    };
+  }
+  const shift = rowShift(index);
+  if (!shift && !dragGroupId.value && !settling.value) return undefined;
+  // Rows keep the transition while a drag is active, so both directions animate: making room and
+  // sliding back when the pointer leaves the slot.
+  return {
+    translate: `0 ${shift}px`,
+    transitionProperty: 'translate',
+    transitionDuration: `${DRAG_TRANSITION_MS}ms`,
+    transitionTimingFunction: LIFT_EASING,
+  };
 }
 
 function clearSettleTimer() {
@@ -138,8 +171,15 @@ function beginPress(event: PointerEvent, groupId: string) {
     dragGroupId.value = groupId;
     dragOffsetY.value = 0;
     settling.value = false;
-    dropSlot.value = rows().findIndex((row) => row.dataset.groupRow === groupId);
-    if (dropSlot.value < 0) dropSlot.value = 0;
+
+    const list = rows();
+    dragIndex = list.findIndex((row) => row.dataset.groupRow === groupId);
+    dragTops = list.map((row) => row.getBoundingClientRect().top);
+    dragRowHeight = list[0]?.getBoundingClientRect().height || 36;
+    dragSpan = dragTops.length > 1 ? dragTops[1] - dragTops[0] : dragRowHeight + 4;
+    dragStartScroll = navRef.value?.scrollTop ?? 0;
+    dropSlot.value = dragIndex >= 0 ? dragIndex : 0;
+
     suppressClick = true;
     document.body.classList.add('select-none');
   }, LONG_PRESS_MS);
@@ -181,11 +221,10 @@ function trackPointer(event: PointerEvent) {
   event.preventDefault();
   dragOffsetY.value = event.clientY - pressOrigin.y;
 
-  const list = rows();
-  let slot = list.length;
-  for (let i = 0; i < list.length; i += 1) {
-    const rect = list[i].getBoundingClientRect();
-    if (event.clientY < rect.top + rect.height / 2) {
+  const scrolled = (navRef.value?.scrollTop ?? 0) - dragStartScroll;
+  let slot = dragTops.length;
+  for (let i = 0; i < dragTops.length; i += 1) {
+    if (event.clientY < dragTops[i] - scrolled + dragRowHeight / 2) {
       slot = i;
       break;
     }
@@ -195,6 +234,17 @@ function trackPointer(event: PointerEvent) {
 }
 
 /** targetIndex maps a drop slot in the visible rows to MoveGroup's post-removal index. */
+/**
+ * rowShift is the "make room" offset: the rows between the dragged one and the drop slot slide by
+ * one row, which is what opens a gap where the row will land.
+ */
+function rowShift(index: number): number {
+  if (!dragGroupId.value || dropSlot.value < 0 || index === dragIndex) return 0;
+  if (dragIndex < dropSlot.value && index > dragIndex && index < dropSlot.value) return -dragSpan;
+  if (dragIndex > dropSlot.value && index >= dropSlot.value && index < dragIndex) return dragSpan;
+  return 0;
+}
+
 function targetIndex(groupId: string, slot: number): number | null {
   const ids = visibleGroups.value.map((group) => group.id);
   const from = props.groups.findIndex((group) => group.id === groupId);
@@ -249,6 +299,8 @@ function resetDragState() {
   dragOffsetY.value = 0;
   settling.value = false;
   dropSlot.value = -1;
+  dragIndex = -1;
+  dragTops = [];
 }
 
 /** Swallows the click that would otherwise select a group right after dropping it. */
@@ -411,7 +463,7 @@ function handleDrop(event: DragEvent, groupId: string) {
           rowLiftClass(group.id),
           dragGroupId && dragGroupId !== group.id ? 'cursor-grabbing' : '',
         ]"
-        :style="dragGroupId === group.id ? { translate: `0 ${dragOffsetY}px` } : undefined"
+        :style="rowStyle(group.id, index)"
         :data-group-id="group.id"
         :data-group-row="group.id"
         @pointerdown="beginPress($event, group.id)"

@@ -18,7 +18,7 @@
   <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?logo=windows11&logoColor=white" alt="Windows 10 / 11">
 </p>
 
-> 🥚 感谢 **欧公子**、**MistralAI** 送来的赛博鸡蛋。
+> 🥚 感谢 **欧公子**（MistralAI）送来的赛博鸡蛋。
 
 ## 它是什么
 
@@ -163,7 +163,7 @@ GeekDesk 2.5.14 把数据（分组、条目、设置）整体序列化在安装�
 
 ## 致谢
 
-- 🥚 **欧公子**、**MistralAI**：赛博鸡蛋，本项目的启动燃料。
+- 🥚 **欧公子**（MistralAI）：赛博鸡蛋，本项目的启动燃料。
 - [Wails](https://wails.io)：把 Go 和 WebView2 缝在一起的那层胶水。
 - [vscode-icons](https://github.com/vscode-icons/vscode-icons)：内置文件类型图标（MIT）。
 - GeekDesk：迁移路径的来源，也是这个项目最初的对照组。

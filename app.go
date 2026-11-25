@@ -845,9 +845,12 @@ func (a *App) LaunchItem(groupID string, itemID string) error {
 	} else {
 		launchErr = launcher.Launch(item.Path, item.Args, item.WorkDir)
 	}
+	if errors.Is(launchErr, launcher.ErrElevationCancelled) {
+		// The user dismissed the UAC prompt: no toast, but no launch and no usage record either,
+		// otherwise the recent list fills with items that never started.
+		return nil
+	}
 	if launchErr != nil {
-		// A cancelled UAC prompt is not a failure worth a toast, but it must not count as a
-		// launch either, otherwise the recent list fills with items the user never started.
 		return launchErr
 	}
 

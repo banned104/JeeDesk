@@ -99,6 +99,21 @@ func targetExists(path string) bool {
 	return err == nil
 }
 
+// cachedIconPresent reports whether icon still resolves to a file in the icon cache. An icon that
+// lives outside the cache (a PNG the user picked) is not ours to rebuild, so it counts as present.
+func cachedIconPresent(iconsDir string, icon string) bool {
+	icon = strings.TrimSpace(icon)
+	if icon == "" {
+		return false
+	}
+	rel, inCache := strings.CutPrefix(strings.ReplaceAll(icon, "\\", "/"), "icons/")
+	if !inCache {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(iconsDir, filepath.Base(rel)))
+	return err == nil
+}
+
 // EnsureIcons extracts an icon for every item that has none, so a hand-written config.json or an
 // item added before the cache existed still shows its real icon. It runs in the background: icon
 // extraction touches the disk and must not block the first paint.
@@ -117,7 +132,10 @@ func (a *App) EnsureIcons() (int, error) {
 	filled := make([]filledIcon, 0)
 	for _, group := range mgr.Get().Groups {
 		for _, item := range group.Items {
-			if strings.TrimSpace(item.Icon) != "" || !targetExists(item.Path) {
+			// An item whose cached icon file is gone needs a new one: bumping iconCacheVersion wipes
+			// the cache, and skipping every item with a non-empty Icon left the whole grid on the
+			// bundled fallback until each entry was edited by hand.
+			if cachedIconPresent(a.iconsDir, item.Icon) || !targetExists(item.Path) {
 				continue
 			}
 			rel, err := resolver.ExtractAndCacheIcon(item.Path, a.iconsDir)

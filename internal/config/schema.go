@@ -75,9 +75,12 @@ type Settings struct {
 	// CollapsedGroups remembers which sidebar groups the user folded away.
 	CollapsedGroups []string `json:"collapsed_groups"`
 
-	// WindowOpacity is a percentage, WindowWidth and WindowHeight are device independent
-	// pixels with 0 meaning the default size. WindowX and WindowY are the last window
-	// position, with 0,0 meaning "let the application choose".
+	// WindowOpacity is a percentage. WindowWidth and WindowHeight are device independent pixels
+	// with 0 meaning the default size, and they are handed to Wails unchanged at startup.
+	// WindowX and WindowY are the last window position in physical screen pixels (virtual-desktop
+	// coordinates, so they match what SetWindowPos takes), with 0,0 meaning "let the application
+	// choose". Mixing the two units is deliberate: a saved size has to survive a display-scale
+	// change, while a saved position has to land on the same pixel of the same monitor.
 	// WindowPositioned marks a saved position as real: monitors left of or above the primary one
 	// have negative coordinates, so 0,0 cannot mean "unset" on its own.
 	WindowPositioned bool `json:"window_positioned"`

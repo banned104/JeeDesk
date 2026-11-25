@@ -1135,3 +1135,61 @@ func TestDipOfKeepsWindowSizesStable(t *testing.T) {
 		})
 	}
 }
+
+// TestUndoSnapshotSurvivesARefusedWrite pins the difference between "restored" and "tried to
+// restore": while config.json cannot be written the snapshot must stay, otherwise the only copy of
+// a deleted item is gone after one failed Ctrl+Z.
+func TestUndoSnapshotSurvivesARefusedWrite(t *testing.T) {
+	app := newTestApp(t)
+
+	groupID, err := app.AddGroup("临时分组")
+	if err != nil {
+		t.Fatalf("AddGroup failed: %v", err)
+	}
+	if err := app.AddItem(groupID, config.Item{ID: "i1", Name: "记事本", Path: `C:\Windows\System32\notepad.exe`}); err != nil {
+		t.Fatalf("AddItem failed: %v", err)
+	}
+	if err := app.DeleteItem(groupID, "i1"); err != nil {
+		t.Fatalf("DeleteItem failed: %v", err)
+	}
+
+	if err := os.WriteFile(app.configPath, []byte(`{"settings": {`), 0o644); err != nil {
+		t.Fatalf("breaking config.json failed: %v", err)
+	}
+
+	if _, err := app.UndoDeleteItem(); !errors.Is(err, config.ErrWriteBlocked) {
+		t.Fatalf("UndoDeleteItem on a broken file = %v, want ErrWriteBlocked", err)
+	}
+	if kind := app.PendingUndoKind(); kind != "item" {
+		t.Fatalf("snapshot dropped after a refused write: kind = %q, want item", kind)
+	}
+}
+
+// TestCachedIconPresentTellsCacheApartFromCustomIcons keeps EnsureIcons from re-extracting icons it
+// does not own, while still rebuilding the ones a cache wipe removed.
+func TestCachedIconPresentTellsCacheApartFromCustomIcons(t *testing.T) {
+	iconsDir := t.TempDir()
+	present := filepath.Join(iconsDir, "abc123.png")
+	if err := os.WriteFile(present, []byte("png"), 0o644); err != nil {
+		t.Fatalf("write cached icon failed: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		icon string
+		want bool
+	}{
+		{"cached and present", `icons/abc123.png`, true},
+		{"cached and gone", `icons/missing.png`, false},
+		{"cached with backslashes", `icons\abc123.png`, true},
+		{"custom icon path", `D:\pics\mine.png`, true},
+		{"empty", ``, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := cachedIconPresent(iconsDir, tc.icon); got != tc.want {
+				t.Fatalf("cachedIconPresent(%q) = %v, want %v", tc.icon, got, tc.want)
+			}
+		})
+	}
+}

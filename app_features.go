@@ -309,7 +309,6 @@ func (a *App) MoveGroup(groupID string, toIndex int) error {
 func (a *App) UndoDeleteItem() (string, error) {
 	a.undoMu.Lock()
 	snapshot := a.deletedItem
-	a.deletedItem = nil
 	a.undoMu.Unlock()
 
 	if snapshot == nil {
@@ -345,15 +344,35 @@ func (a *App) UndoDeleteItem() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	a.consumeDeletedItem(snapshot)
 	a.emitToast("success", fmt.Sprintf("已恢复「%s」", snapshot.item.Name))
 	return snapshot.item.Name, nil
+}
+
+// consumeDeletedItem forgets an undo snapshot once the restore reached the disk. A refused write
+// (a broken config.json, a blocked file) must leave Ctrl+Z able to try again instead of dropping
+// the only copy of what was deleted.
+func (a *App) consumeDeletedItem(snapshot *deletedItemSnapshot) {
+	a.undoMu.Lock()
+	if a.deletedItem == snapshot {
+		a.deletedItem = nil
+	}
+	a.undoMu.Unlock()
+}
+
+// consumeDeletedGroup is consumeDeletedItem for group snapshots.
+func (a *App) consumeDeletedGroup(snapshot *deletedGroupSnapshot) {
+	a.undoMu.Lock()
+	if a.deletedGroup == snapshot {
+		a.deletedGroup = nil
+	}
+	a.undoMu.Unlock()
 }
 
 // UndoDeleteGroup restores the group removed by the last DeleteGroup call.
 func (a *App) UndoDeleteGroup() (string, error) {
 	a.undoMu.Lock()
 	snapshot := a.deletedGroup
-	a.deletedGroup = nil
 	a.undoMu.Unlock()
 
 	if snapshot == nil {
@@ -383,6 +402,7 @@ func (a *App) UndoDeleteGroup() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	a.consumeDeletedGroup(snapshot)
 	a.SetActiveGroup(snapshot.group.ID)
 	a.emitToast("success", fmt.Sprintf("已恢复分组「%s」", snapshot.group.Name))
 	return snapshot.group.Name, nil

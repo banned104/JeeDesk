@@ -637,3 +637,53 @@ func TestManagerDoesNotReportRemovalOnReplace(t *testing.T) {
 		t.Fatal("timed out waiting for removal handler after the file was deleted")
 	}
 }
+
+// TestManagerReplaceRecoversFromBrokenConfig covers the recovery actions the UI offers. While the
+// file cannot be parsed every regular write is refused, and only an explicit replace may overwrite
+// it — that is what "rebuild config.json" and "import configuration" need.
+func TestManagerReplaceRecoversFromBrokenConfig(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	broken := []byte(`{"settings": { "hotkey": "Ctrl+K"`)
+	if err := os.WriteFile(cfgPath, broken, 0o644); err != nil {
+		t.Fatalf("WriteFile broken config failed: %v", err)
+	}
+
+	mgr, err := NewManagerWithFallback(cfgPath, nil, nil)
+	if err == nil {
+		t.Fatal("expected a load error for broken config")
+	}
+	defer func() { _ = mgr.Close() }()
+
+	if err := mgr.Update(func(c *Config) error { return nil }); !errors.Is(err, ErrWriteBlocked) {
+		t.Fatalf("Update on a broken file = %v, want ErrWriteBlocked", err)
+	}
+
+	recovered := DefaultConfig()
+	recovered.Settings.Hotkey = "Alt+J"
+	recovered.Groups = []Group{{ID: "g", Name: "G"}}
+	if err := mgr.Replace(recovered); err != nil {
+		t.Fatalf("Replace failed: %v", err)
+	}
+
+	onDisk, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load after Replace failed: %v", err)
+	}
+	if onDisk.Settings.Hotkey != "Alt+J" || len(onDisk.Groups) != 1 {
+		t.Fatalf("unexpected config after Replace: %+v", onDisk)
+	}
+	if _, err := os.Stat(BackupPath(cfgPath)); err != nil {
+		t.Fatalf("expected the damaged file to be kept as a backup: %v", err)
+	}
+
+	// The write block must be gone for regular updates too.
+	if err := mgr.Update(func(c *Config) error {
+		c.Settings.Hotkey = "Alt+K"
+		return nil
+	}); err != nil {
+		t.Fatalf("Update after Replace failed: %v", err)
+	}
+	if final, err := Load(cfgPath); err != nil || final.Settings.Hotkey != "Alt+K" {
+		t.Fatalf("unexpected config after the follow-up Update: %+v, %v", final, err)
+	}
+}

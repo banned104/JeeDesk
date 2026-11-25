@@ -122,6 +122,10 @@ export function OpenURL(arg1) {
   return window['go']['main']['App']['OpenURL'](arg1);
 }
 
+export function PendingUndoKind() {
+  return window['go']['main']['App']['PendingUndoKind']();
+}
+
 export function PickDirectory(arg1) {
   return window['go']['main']['App']['PickDirectory'](arg1);
 }

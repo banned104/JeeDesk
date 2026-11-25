@@ -289,13 +289,14 @@ func (a *App) SetCollapsedGroups(ids []string) error {
 }
 
 // RebuildConfigFile writes the in-memory configuration back to config.json. It is the recovery
-// action offered when the file was deleted.
+// action offered when the file was deleted or cannot be parsed, so it must work precisely when
+// regular writes are blocked.
 func (a *App) RebuildConfigFile() error {
 	mgr := a.configManager()
 	if mgr == nil {
 		return errors.New("配置管理器尚未就绪")
 	}
-	return mgr.Update(func(*config.Config) error { return nil })
+	return mgr.Replace(a.GetConfig())
 }
 
 // OpenLogFile opens logs/app.log in the default editor.

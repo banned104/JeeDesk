@@ -42,6 +42,7 @@ interface WailsGoApp {
   UndoDeleteItem(): Promise<string>;
   UndoDeleteGroup(): Promise<string>;
   GetUndoLabel(): Promise<string>;
+  PendingUndoKind(): Promise<string>;
   ScanStartMenu(): Promise<StartMenuEntry[]>;
   ImportStartMenuItems(groupID: string, lnkPaths: string[]): Promise<number>;
   GetAppInfo(): Promise<AppInfo>;
@@ -577,6 +578,14 @@ export const bridge = {
     const app = getApp();
     if (app) {
       return await app.GetUndoLabel();
+    }
+    return '';
+  },
+
+  async pendingUndoKind(): Promise<string> {
+    const app = getApp();
+    if (app) {
+      return await app.PendingUndoKind();
     }
     return '';
   },

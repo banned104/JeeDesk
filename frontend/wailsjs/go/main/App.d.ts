@@ -64,6 +64,8 @@ export function OpenLogFile():Promise<void>;
 
 export function OpenURL(arg1:string):Promise<void>;
 
+export function PendingUndoKind():Promise<string>;
+
 export function PickDirectory(arg1:string):Promise<string>;
 
 export function PickFile(arg1:string,arg2:string,arg3:string):Promise<string>;

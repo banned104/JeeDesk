@@ -1064,3 +1064,74 @@ func TestMoveGroupUsesPostRemovalIndex(t *testing.T) {
 		})
 	}
 }
+
+// TestPendingUndoKindTellsTheTruth keeps the Ctrl+Z routing honest. The label the UI shows is prose,
+// so the kind has to come from its own answer: reading it back out of the label is what silently
+// sent a deleted group to the item undo.
+func TestPendingUndoKindTellsTheTruth(t *testing.T) {
+	app := newTestApp(t)
+
+	if kind := app.PendingUndoKind(); kind != "" {
+		t.Fatalf("PendingUndoKind with nothing pending = %q, want empty", kind)
+	}
+
+	groupID, err := app.AddGroup("临时分组")
+	if err != nil {
+		t.Fatalf("AddGroup failed: %v", err)
+	}
+	if err := app.AddItem(groupID, config.Item{ID: "i1", Name: "记事本", Path: `C:\Windows\System32\notepad.exe`}); err != nil {
+		t.Fatalf("AddItem failed: %v", err)
+	}
+
+	if err := app.DeleteItem(groupID, "i1"); err != nil {
+		t.Fatalf("DeleteItem failed: %v", err)
+	}
+	if kind := app.PendingUndoKind(); kind != "item" {
+		t.Fatalf("PendingUndoKind after deleting an item = %q, want item", kind)
+	}
+	if label := app.GetUndoLabel(); label == "" {
+		t.Fatal("expected a label for the pending item undo")
+	}
+	if _, err := app.UndoDeleteItem(); err != nil {
+		t.Fatalf("UndoDeleteItem failed: %v", err)
+	}
+
+	// Deleting a group replaces the pending snapshot, so the kind has to change with it.
+	if err := app.DeleteGroup(groupID); err != nil {
+		t.Fatalf("DeleteGroup failed: %v", err)
+	}
+	if kind := app.PendingUndoKind(); kind != "group" {
+		t.Fatalf("PendingUndoKind after deleting a group = %q, want group", kind)
+	}
+	if name, err := app.UndoDeleteGroup(); err != nil || name != "临时分组" {
+		t.Fatalf("UndoDeleteGroup = %q, %v", name, err)
+	}
+	if kind := app.PendingUndoKind(); kind != "" {
+		t.Fatalf("PendingUndoKind after restoring the group = %q, want empty", kind)
+	}
+}
+
+// TestDipOfKeepsWindowSizesStable pins the conversion that stopped the panel from growing by the
+// scale factor on every restart of a scaled display.
+func TestDipOfKeepsWindowSizesStable(t *testing.T) {
+	cases := []struct {
+		name     string
+		physical int
+		dpi      int
+		want     int
+	}{
+		{"100 percent", 960, 96, 960},
+		{"125 percent", 1200, 120, 960},
+		{"150 percent", 1440, 144, 960},
+		{"rounded", 1500, 144, 1000},
+		{"unknown dpi", 960, 0, 960},
+		{"negative", -150, 144, -100},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := dipOf(tc.physical, tc.dpi); got != tc.want {
+				t.Fatalf("dipOf(%d, %d) = %d, want %d", tc.physical, tc.dpi, got, tc.want)
+			}
+		})
+	}
+}

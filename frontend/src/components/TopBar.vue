@@ -110,6 +110,7 @@ defineExpose({ focusSearch, blurSearch });
           ref="searchInputRef"
           :value="searchQuery"
           type="text"
+          data-jd-search
           :placeholder="t('搜索项目…（/）')"
           :aria-label="t('搜索项目')"
           class="w-36 sm:w-44 h-7 pl-7 pr-6 rounded-lg jd-input border text-xs transition-all"

@@ -643,6 +643,20 @@ func (a *App) GetUndoLabel() string {
 	return ""
 }
 
+// PendingUndoKind reports what Ctrl+Z would restore: "item", "group", or "" when nothing is
+// pending. The label above is prose meant for humans, so the UI cannot read the kind back out of
+// it and needs this separate answer to pick the right restore call.
+func (a *App) PendingUndoKind() string {
+	switch label := a.pendingUndoLabel(); {
+	case strings.HasPrefix(label, "item:"):
+		return "item"
+	case strings.HasPrefix(label, "group:"):
+		return "group"
+	default:
+		return ""
+	}
+}
+
 // OpenBaseDir opens the folder that holds config.json in Explorer.
 func (a *App) OpenBaseDir() error {
 	return launcher.OpenFile(a.baseDir)
@@ -680,10 +694,9 @@ func (a *App) ImportConfig() (int, error) {
 	if mgr == nil {
 		return 0, errors.New("配置管理器尚未就绪")
 	}
-	if err := mgr.Update(func(cfg *config.Config) error {
-		*cfg = imported
-		return nil
-	}); err != nil {
+	// Replace, not Update: importing a file the user picked is the explicit way out of the write
+	// block that a damaged config.json puts the application in.
+	if err := mgr.Replace(imported); err != nil {
 		return 0, err
 	}
 
@@ -753,8 +766,12 @@ func (a *App) flushWindowState() {
 		return
 	}
 
-	width := int(rect.Right - rect.Left)
-	height := int(rect.Bottom - rect.Top)
+	// GetWindowRect answers in physical pixels, while window_width/window_height are device
+	// independent pixels (they are handed to Wails unchanged at startup). Storing the raw rectangle
+	// made the panel grow by the scale factor on every restart of a scaled display.
+	dpi := windowDPI(hwnd)
+	width := dipOf(int(rect.Right-rect.Left), dpi)
+	height := dipOf(int(rect.Bottom-rect.Top), dpi)
 	x := int(rect.Left)
 	y := int(rect.Top)
 

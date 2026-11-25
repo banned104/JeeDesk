@@ -21,6 +21,7 @@ var (
 	procSetWindowPos          = modUser32.NewProc("SetWindowPos")
 	procGetCursorPos          = modUser32.NewProc("GetCursorPos")
 	procGetWindowRect         = modUser32.NewProc("GetWindowRect")
+	procGetDpiForWindow       = modUser32.NewProc("GetDpiForWindow")
 	procGetAsyncKeyState      = modUser32.NewProc("GetAsyncKeyState")
 	procSetForegroundWindow   = modUser32.NewProc("SetForegroundWindow")
 	procBringWindowToTop      = modUser32.NewProc("BringWindowToTop")
@@ -247,6 +248,28 @@ func windowRectOf(hwnd uintptr) (winRECT, bool) {
 		return winRECT{}, false
 	}
 	return rect, true
+}
+
+// windowDPI reports the effective DPI of the monitor the window is on, or 0 when it cannot be read.
+func windowDPI(hwnd uintptr) int {
+	if hwnd == 0 {
+		return 0
+	}
+	dpi, _, _ := procGetDpiForWindow.Call(hwnd)
+	return int(dpi)
+}
+
+// dipOf converts physical pixels to device independent pixels at the given DPI, rounding to the
+// nearest whole pixel. A DPI of 0 means the system could not report one, so the value is kept as is.
+func dipOf(physical, dpi int) int {
+	if dpi <= 0 {
+		return physical
+	}
+	scaled := physical * 96
+	if scaled < 0 {
+		return -((-scaled + dpi/2) / dpi)
+	}
+	return (scaled + dpi/2) / dpi
 }
 
 // monitorWorkArea reports the work area of a monitor handle.

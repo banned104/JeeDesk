@@ -196,6 +196,33 @@ func (m *Manager) update(mutate func(*Config) error, notify bool) error {
 	return nil
 }
 
+// Replace overwrites config.json with cfg even when a previous read failed. The write block that
+// guards a file the application could not parse exists so an unnoticed save never destroys what is
+// on disk; "rebuild config.json" and "import configuration" are the user explicitly asking to
+// replace that file, so they come through here instead of Update.
+func (m *Manager) Replace(cfg Config) error {
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
+
+	next := Clone(cfg)
+	Normalize(&next)
+
+	if err := SaveWithBackup(m.path, next, true); err != nil {
+		return err
+	}
+	m.mark = markOf(m.path)
+	m.diskErr = nil
+
+	m.mu.Lock()
+	m.current = Clone(next)
+	m.mu.Unlock()
+
+	if m.onUpdate != nil {
+		m.onUpdate(Clone(next))
+	}
+	return nil
+}
+
 // syncLocked reconciles memory with the file on disk. The caller holds writeMu.
 func (m *Manager) syncLocked() (Config, error) {
 	if m.diskErr != nil {

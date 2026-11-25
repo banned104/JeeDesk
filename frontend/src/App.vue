@@ -985,9 +985,13 @@ async function handleStartMenuImport(lnkPaths: string[]) {
 
 async function handleUndo() {
   try {
-    const name = (await bridge.getUndoLabel()).startsWith('group:')
-      ? await bridge.undoDeleteGroup()
-      : await bridge.undoDeleteItem();
+    const kind = await bridge.pendingUndoKind();
+    if (!kind) {
+      showToast({ type: 'info', message: t('没有可撤销的删除') });
+      await refreshUndoLabel();
+      return;
+    }
+    const name = kind === 'group' ? await bridge.undoDeleteGroup() : await bridge.undoDeleteItem();
     if (name) {
       showToast({ type: 'success', message: t('已恢复「{name}」', { name }) });
     } else {
@@ -1005,6 +1009,10 @@ function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName;
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
+}
+
+function isSearchInput(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && target.matches('input[data-jd-search]');
 }
 
 function isOverlayOpen(): boolean {
@@ -1070,15 +1078,28 @@ function handleWindowKeyDown(event: KeyboardEvent) {
 
   if (isOverlayOpen()) return;
 
-  // Everything below is a global shortcut, so a focused text field is checked first: inside an input
+  // Everything below is a global shortcut, so a focused text field is handled first: inside an input
   // Ctrl+Z must undo the text, Tab must move focus, and the arrows must move the caret. Only Enter
   // (launch the selection) and Escape (handled above) are taken away from it.
   if (isTypingTarget(event.target)) {
     if (event.key === 'Enter') {
       event.preventDefault();
       void launchSelected();
+      return;
     }
-    return;
+    if (!isSearchInput(event.target)) return;
+    // The search box owns focus every time the panel appears, so the documented launcher keys have
+    // to keep working from there. Keys that edit the text keep their native meaning while the field
+    // has content: with an empty field they mean "move or remove the selection" instead.
+    const field = event.target as HTMLInputElement;
+    const empty = field.value === '';
+    const editsText =
+      !empty &&
+      (event.key === 'Home' ||
+        event.key === 'End' ||
+        event.key === 'Delete' ||
+        ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z'));
+    if (editsText) return;
   }
 
   if (event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'z') {
@@ -1188,6 +1209,8 @@ function handleWindowKeyDown(event: KeyboardEvent) {
       void deleteSelected();
       return;
     case '/':
+      // A slash typed into the search box is part of the query, not a request to focus it.
+      if (isTypingTarget(event.target)) return;
       event.preventDefault();
       topBarRef.value?.focusSearch();
       return;
@@ -1196,6 +1219,7 @@ function handleWindowKeyDown(event: KeyboardEvent) {
   }
 
   // Any printable character starts a search, the way a launcher is expected to behave.
+  if (isTypingTarget(event.target)) return;
   if (!event.ctrlKey && !event.altKey && event.key.length === 1 && event.key !== ' ') {
     topBarRef.value?.focusSearch();
   }

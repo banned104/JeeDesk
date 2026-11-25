@@ -60,6 +60,12 @@ const MOVE_CANCEL_PX = 6;
 
 const dragGroupId = ref('');
 const dropSlot = ref(-1);
+// The lifted row follows the pointer through the CSS `translate` property: `translate` has no
+// transition while dragging so it tracks the pointer 1:1, while `scale`/`box-shadow` transition,
+// which is what makes the row read as "picked up" instead of just highlighted.
+const dragOffsetY = ref(0);
+const settling = ref(false);
+let settleTimer: ReturnType<typeof setTimeout> | null = null;
 let pressTimer: ReturnType<typeof setTimeout> | null = null;
 let pressOrigin = { x: 0, y: 0 };
 let suppressClick = false;
@@ -68,6 +74,33 @@ let autoScrollDir = 0;
 
 function rows(): HTMLElement[] {
   return Array.from(navRef.value?.querySelectorAll<HTMLElement>('[data-group-row]') ?? []);
+}
+
+/** rowLiftClass is the "picked up" look: raised above the list, scaled, with a soft shadow. */
+function rowLiftClass(groupId: string): string[] {
+  if (dragGroupId.value !== groupId) return [];
+  return [
+    'z-10',
+    'cursor-grabbing',
+    'border',
+    'jd-border-strong',
+    'scale-[1.04]',
+    'shadow-[0_14px_30px_-8px_rgba(0,0,0,0.65)]',
+    'ring-1',
+    'ring-sky-300/40',
+    'duration-150',
+    'ease-out',
+    settling.value
+      ? 'transition-[translate,scale,box-shadow]'
+      : 'transition-[scale,box-shadow]',
+  ];
+}
+
+function clearSettleTimer() {
+  if (settleTimer !== null) {
+    clearTimeout(settleTimer);
+    settleTimer = null;
+  }
 }
 
 function clearPressTimer() {
@@ -103,6 +136,8 @@ function beginPress(event: PointerEvent, groupId: string) {
   pressTimer = setTimeout(() => {
     pressTimer = null;
     dragGroupId.value = groupId;
+    dragOffsetY.value = 0;
+    settling.value = false;
     dropSlot.value = rows().findIndex((row) => row.dataset.groupRow === groupId);
     if (dropSlot.value < 0) dropSlot.value = 0;
     suppressClick = true;
@@ -144,6 +179,7 @@ function trackPointer(event: PointerEvent) {
     return;
   }
   event.preventDefault();
+  dragOffsetY.value = event.clientY - pressOrigin.y;
 
   const list = rows();
   let slot = list.length;
@@ -186,14 +222,33 @@ function finishPress() {
 
   const groupId = dragGroupId.value;
   const slot = dropSlot.value;
-  dragGroupId.value = '';
-  dropSlot.value = -1;
-  if (!groupId) return;
+  if (!groupId) {
+    resetDragState();
+    return;
+  }
 
   const toIndex = targetIndex(groupId, slot);
+  // Settle first, so the row visibly lands instead of snapping back to its slot. The reorder is
+  // emitted right away; the list has already moved by the time the animation ends.
+  settling.value = true;
+  dragOffsetY.value = 0;
+  dropSlot.value = -1;
   if (toIndex !== null) {
     emit('reorderGroup', { groupId, toIndex });
   }
+  clearSettleTimer();
+  settleTimer = setTimeout(() => {
+    settleTimer = null;
+    resetDragState();
+  }, 160);
+}
+
+function resetDragState() {
+  clearSettleTimer();
+  dragGroupId.value = '';
+  dragOffsetY.value = 0;
+  settling.value = false;
+  dropSlot.value = -1;
 }
 
 /** Swallows the click that would otherwise select a group right after dropping it. */
@@ -206,6 +261,7 @@ function handleRowClickCapture(event: MouseEvent) {
 
 onBeforeUnmount(() => {
   clearPressTimer();
+  clearSettleTimer();
   releasePointerListeners();
   stopAutoScroll();
   document.body.classList.remove('select-none');
@@ -346,15 +402,16 @@ function handleDrop(event: DragEvent, groupId: string) {
       <div
         v-for="(group, index) in visibleGroups"
         :key="group.id"
-        class="group relative w-full h-9 rounded-xl transition-all duration-150 touch-none"
+        class="group relative w-full h-9 rounded-xl transition-colors duration-150 touch-none"
         :class="[
           group.id === activeGroupId
             ? 'jd-surface-strong jd-text font-medium border jd-border-strong shadow-sm'
             : 'jd-muted jd-hover border border-transparent',
           dropTargetId === group.id ? 'ring-2 ring-sky-400/80' : '',
-          dragGroupId === group.id ? 'opacity-60 ring-2 ring-sky-400/70 cursor-grabbing' : '',
+          rowLiftClass(group.id),
           dragGroupId && dragGroupId !== group.id ? 'cursor-grabbing' : '',
         ]"
+        :style="dragGroupId === group.id ? { translate: `0 ${dragOffsetY}px` } : undefined"
         :data-group-id="group.id"
         :data-group-row="group.id"
         @pointerdown="beginPress($event, group.id)"

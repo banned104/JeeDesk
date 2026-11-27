@@ -106,11 +106,18 @@ func InstallCrashOutput(dir string) (func(), error) {
 }
 
 // openRuntimeCrashLog opens a fresh file for this process, so a runtime report always belongs to
-// exactly one run. Older ones are pruned with the text reports.
+// exactly one run. Older ones are pruned here rather than only in writeCrashFile: a build that
+// never crashes would otherwise leave one empty log per start.
 func openRuntimeCrashLog(crashDir string) (*os.File, error) {
 	stamp := time.Now().Format("20060102-150405")
 	path := filepath.Join(crashDir, fmt.Sprintf("%s-%s-%d.log", runtimeLogName, stamp, os.Getpid()))
-	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	// The file just opened is the newest by modification time, so it survives the prune.
+	pruneNewest(crashDir, ".log", maxRuntimeLogs)
+	return file, nil
 }
 
 // Crashed reports whether this process recorded a crash.

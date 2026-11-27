@@ -98,7 +98,8 @@
   进程自管的 goroutine 与 `syscall.NewCallback` 回调入口 `defer applog.Recover(...)`；
   前端 Vue 错误与未捕获异常经新绑定 `App.ReportFrontendError` 回传。
   已被捕获的 panic 不再让进程退出，`applog.Recover` 记完报告后继续收尾。
-- 裁剪策略：`*.txt` 保留最新 20 份、`runtime-crash-*.log` 保留最新 5 份。
+- 裁剪策略：`*.txt` 保留最新 20 份、`runtime-crash-*.log` 保留最新 5 份；运行期日志在启动时就裁剪，
+  否则一个从不崩溃的构建每次启动都留一个空文件。
 - 前端限流：`errorReport.ts` 与 Go 侧各限一层（前端同签名 3 条、整个页面 20 条；后端同签名 3 条、
   整进程 100 条）。被后端丢掉的条数在退出时写进日志，避免渲染循环把磁盘写满。
 - 设置页新增「崩溃报告」按钮（`App.OpenCrashReports`），直接打开上述目录；启动时「上次没有

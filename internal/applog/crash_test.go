@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestWriteReportCapturesTheContext is the reason this file exists: a report has to be usable
@@ -158,6 +159,55 @@ func TestPruneReportsBoundsBothKinds(t *testing.T) {
 	}
 	if logs > maxRuntimeLogs {
 		t.Fatalf("%d runtime logs left, want at most %d", logs, maxRuntimeLogs)
+	}
+}
+
+func TestInstallCrashOutputPrunesPerStartLogs(t *testing.T) {
+	dir := t.TempDir()
+	crashDir := CrashDir(dir)
+	if err := os.MkdirAll(crashDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	// One runtime log is opened per start, so a build that never crashes would grow this folder
+	// forever unless the prune happens while opening, not only when a report is written.
+	old := time.Now().Add(-time.Hour)
+	for i := 0; i < maxRuntimeLogs+3; i++ {
+		path := filepath.Join(crashDir, runtimeLogName+"-"+itoa(i)+".log")
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatalf("WriteFile failed: %v", err)
+		}
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatalf("Chtimes failed: %v", err)
+		}
+	}
+
+	file, err := openRuntimeCrashLog(crashDir)
+	if err != nil {
+		t.Fatalf("openRuntimeCrashLog failed: %v", err)
+	}
+	path := file.Name()
+	_ = file.Close()
+
+	entries, err := os.ReadDir(crashDir)
+	if err != nil {
+		t.Fatalf("ReadDir failed: %v", err)
+	}
+	logs := 0
+	kept := false
+	for _, entry := range entries {
+		if !strings.EqualFold(filepath.Ext(entry.Name()), ".log") {
+			continue
+		}
+		logs++
+		if filepath.Join(crashDir, entry.Name()) == path {
+			kept = true
+		}
+	}
+	if logs > maxRuntimeLogs {
+		t.Fatalf("%d runtime logs left, want at most %d", logs, maxRuntimeLogs)
+	}
+	if !kept {
+		t.Fatalf("the log of this run was pruned: %s", path)
 	}
 }
 

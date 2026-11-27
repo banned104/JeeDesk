@@ -87,6 +87,31 @@
 - 「清理图标缓存」在配置读取失败或没有任何分组时跳过，不会清掉仍被引用的图标。
 - 启动时检测到上次异常退出、单实例唤醒、日志写入都在主实例确认后执行，副实例不再写日志或默认配置。
 
+### 崩溃记录
+
+#### 新增
+
+- 崩溃报告落盘到 `<baseDir>/logs/crashes/`：每份 `.txt` 含时间、版本、来源（goroutine 名、
+  Win32 回调或前端事件）、堆栈、全部 goroutine 的栈与 `logs/app.log` 末尾若干行；
+  `logs/last-panic.txt` 始终指向最新一份。文件名带微秒与原子序号，同一秒内同来源不会互相覆盖。
+- 三层覆盖：`debug.SetCrashOutput` 接 Go 运行期致命错误（另存 `runtime-crash-*.log`）；
+  进程自管的 goroutine 与 `syscall.NewCallback` 回调入口 `defer applog.Recover(...)`；
+  前端 Vue 错误与未捕获异常经新绑定 `App.ReportFrontendError` 回传。
+  已被捕获的 panic 不再让进程退出，`applog.Recover` 记完报告后继续收尾。
+- 裁剪策略：`*.txt` 保留最新 20 份、`runtime-crash-*.log` 保留最新 5 份。
+- 前端限流：`errorReport.ts` 与 Go 侧各限一层（前端同签名 3 条、整个页面 20 条；后端同签名 3 条、
+  整进程 100 条）。被后端丢掉的条数在退出时写进日志，避免渲染循环把磁盘写满。
+- 设置页新增「崩溃报告」按钮（`App.OpenCrashReports`），直接打开上述目录；启动时「上次没有
+  正常退出」的提示也指向这里，不再只说去看日志。
+
+#### 修复
+
+- `logs/.running` 不再在退出后残留：`Quit()` 在 `os.Exit(0)` 前清除标记，托盘退出后不会每次启动
+  都误报「上次没有正常退出」。同时修正 `defer` 注册顺序（`Finish` 先注册、`Recover` 后注册，
+  LIFO 才让崩溃标记留到收尾之后）。
+- 崩溃报告的日志尾部不再恒为空：此前用包级变量取目录，与写入时传入的目录不是同一个。
+- `main` 早期阶段（日志初始化、WebView 装配）也有兜底 `Recover`，此时崩溃同样会留下报告。
+
 ### 外观、设置与无障碍
 
 #### 新增
@@ -179,8 +204,10 @@
 - 添加或编辑项目时保存失败，提交按钮恢复可用并保留已填内容，可以直接重试。
 - 把文件或文件夹拖进窗口会添加到当前分组。此前根元素没有挂 `--wails-drop-target`，
   Wails 的拖放管线不接管，WebView2 按默认行为把拖入项当作网址导航，弹出预览窗口。
-- 网格内可以直接拖动项目排序（拖到另一个 tile 上即占它的位置），也可以拖到侧边栏的分组上换组；
-  此前 tile 只设了拖动载荷、没有 drop 处理，拖动毫无反应。
+- 网格内可以直接拖动项目排序（拖到另一个 tile 上即占它的位置），也可以拖到侧边栏的分组行上换组。
+  拖动改用指针事件实现（与分组长按拖动同一思路）：`main.go` 设了 `DisableWebViewDrop`，Wails 会
+  关闭整页的外部拖放，HTML5 的 `dragover`/`drop` 在页面内不会触发，只有指针事件可用。
+  拖动中的 tile 放大浮起，落点在原位置时不做无谓写盘，卸载时会清掉监听与临时节点。
 - 分组长按拖动结束后不再吞掉下一次点击：`suppressClick` 只在「松手落在同一行」时被消费，
   拖到别行或空隙后标志位残留，下一次短按（含折叠按钮）会被静默忽略。现在它在落定后立即复位。
 
@@ -188,6 +215,9 @@
 
 - 新增绑定方法 `App.PendingUndoKind`（返回 `item`、`group` 或空串），供 `Ctrl+Z` 选择恢复目标；
   `frontend/src/api/bridge.ts` 与 `frontend/wailsjs` 已同步。
+- 侧边栏不再自行处理 HTML5 跨组拖放：`GroupSidebar` 的 `drop-item` 事件与其 `dragover`/`drop`
+  处理已删除（生产者随 tile 改为指针拖动一并消失），跨组改由网格把指针落点解析成组 ID 后调
+  `MoveItem`。
 - `frontend/src/api/bridge.ts` 补齐 `Quit` 与 `ToggleWindow`：这两个绑定一直存在但没进
   `WailsGoApp` 接口，属于 AGENTS.md 要求的「新增绑定必须同步 bridge」的缺口。
 - `settings.window_x/y` 在 `internal/config/schema.go` 里明确为物理屏幕像素，`window_width/height`

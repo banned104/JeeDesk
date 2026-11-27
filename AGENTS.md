@@ -18,7 +18,7 @@
 | `app_diagnostics.go` | `App` 的诊断类绑定：失效目标、图标补齐与清理、日志、检查更新、`OpenURL` |
 | `app_test.go` | 根包（`package main`）唯一测试文件；Go 只允许测试与被测包同目录，新增根包测试也写在这里 |
 | `single_instance.go`、`win_helpers.go` | 单实例互斥与唤醒、Win32 窗口辅助 |
-| `internal/applog` | 日志初始化、轮转、异常退出标记与 panic 记录 |
+| `internal/applog` | 日志初始化、轮转、异常退出标记；`crash.go` 负责崩溃报告（`Recover`、`WriteFrontendReport`、裁剪与 `last-panic.txt`） |
 | `internal/autostart` | `HKCU\Run` 开机自启 |
 | `internal/config` | `config.json` 结构、原子读写与热更新监听 |
 | `internal/hook` | 全局快捷键与鼠标触发钩子 |
@@ -32,8 +32,9 @@
 | `frontend/wailsjs` | Wails 构建时自动生成并纳入版本管理，不手工编辑；前端源码不引用它 |
 
 运行时数据是 `config.json`、`config.json.bak`、`icons/` 图标缓存、`usage.json`（启动次数与最近使用）、
-`logs/app.log`（超过 2 MiB 轮转为 `.1`，`logs/.running` 是异常退出标记）与 `webview/`
-（WebView2 用户数据目录），目录由
+`logs/app.log`（超过 2 MiB 轮转为 `.1`）、`logs/.running`（异常退出标记）、
+`logs/last-panic.txt`（指向最新崩溃报告）、`logs/crashes/`（崩溃报告：保留最新 20 份 `*.txt` 与
+5 份 `runtime-crash-*.log`）与 `webview/`（WebView2 用户数据目录），目录由
 `resolveBaseDir`（`main.go`）决定：
 开发运行（`go run`、`wails dev`）时是当前工作目录；其他情况下，当前工作目录已有属于 JeeDesk 的
 `config.json`（或一个无法解析的同名文件）时用它，否则用可执行文件所在目录。
@@ -41,10 +42,16 @@
 
 `JEEDESK_BASE_DIR` 可覆盖数据目录，`JEEDESK_DEV=1` 显式声明开发运行（无需靠二进制路径猜测）。
 新增的 `App` 绑定（搜索、最近使用、移动排序、撤销、开始菜单导入、配置导入导出、
-`SetModalOpen`、`GetMissingTargets`、`CleanupIcons`、`EnsureIcons`、`CheckUpdates` 等）同样必须同步
+`SetModalOpen`、`GetMissingTargets`、`CleanupIcons`、`EnsureIcons`、`CheckUpdates`、
+`OpenCrashReports`、`ReportFrontendError` 等）同样必须同步
 `frontend/src/api/bridge.ts`；`frontend/wailsjs` 由 `wails build` / `wails generate module` 生成。
 前端文案通过 `frontend/src/i18n.ts` 的 `t()` 与组件内的 `registerTranslations` 提供英文，
 新增中文文案时同时补英文。
+
+崩溃记录分三层，新增自管 goroutine 或 `syscall.NewCallback` 回调时按同样方式登记：
+`debug.SetCrashOutput` 接 Go 运行期致命错误；进程自己起的 goroutine 与 Win32 回调在入口
+`defer applog.Recover("来源")`；前端 Vue 错误与未捕获异常经 `ReportFrontendError` 回传。
+`main` 里 `defer Finish` 必须先于 `defer Recover` 注册（LIFO 后跑），否则崩溃标记会被提前清掉。
 
 ## 通用流程来源
 

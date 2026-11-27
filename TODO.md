@@ -21,6 +21,9 @@
 - **没有虚拟滚动**：300 项以内靠 `content-visibility` 够用；上千项需要窗口化。
 - **托盘图标只嵌入了 32×32**：高 DPI 托盘会由系统放大，必要时补 16/20/24/40/48 多尺寸 ICO。
 - **`internal/search` 与 `internal/usage` 没有测试**：评分排序与使用次数统计是纯函数逻辑，最容易补单测。
+- **崩溃报告拿不到前端崩栈**：`ReportFrontendError` 只能收到前端传来的 `message`/`stack`，
+  其中没有 Go 侧的栈；只在前端崩溃时，报告只能定位到页面与组件，看不到当时的后端调用。
+  可考虑在 `ReportFrontendError` 里附带 `lastBindingCall()` 之类的上下文（`bridge.ts` 已记录）。
 
 ## 结构债务（不改变行为，逐步收敛）
 

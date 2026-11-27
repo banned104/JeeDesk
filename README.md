@@ -83,9 +83,15 @@ JeeDesk 是一个常驻托盘的小启动面板：按一下全局快捷键（默
   `groups[]` 是 `id`、`name`、`items[]`，条目字段为 `id`、`name`、`path`、`args`、
   `work_dir`、`icon`、`admin`。
 - 同目录的 `config.json.bak`（上一次保存的内容）、`icons/`（图标缓存）、`usage.json`
-  （启动次数与最近使用）、`logs/app.log`（超过 2 MiB 轮转为 `.1`，`logs/.running` 是异常退出
-  标记）、`webview/`（WebView2 用户数据目录）都由运行时生成，全部被 `.gitignore` 忽略。
+  （启动次数与最近使用）、`logs/app.log`（超过 2 MiB 轮转为 `.1`）、`logs/.running`
+  （异常退出标记）、`logs/last-panic.txt` 与 `logs/crashes/`（崩溃报告）、`webview/`
+  （WebView2 用户数据目录）都由运行时生成，全部被 `.gitignore` 忽略。
   便携使用时把整个目录一起拷走即可。
+- 程序崩溃时不需要手工找日志：`logs/crashes/` 下会留下一个 `.txt` 报告，包含时间、版本、
+  崩溃来源（goroutine 名、Win32 回调或前端事件）、完整堆栈、所有 goroutine 的栈，以及
+  `logs/app.log` 的末尾若干行；`logs/last-panic.txt` 始终指向最新一份。报告保留最新 20 份，
+  Go 运行期致命错误（如并发写 map）另存为 `runtime-crash-*.log`，保留最新 5 份。
+  界面「设置 → 崩溃报告」会直接打开这个目录。
 - 运行目录由 `resolveBaseDir` 决定：本仓库内开发时（`go run`、`wails dev`）是当前工作目录；
   其他情况下，当前工作目录已有属于 JeeDesk 的 `config.json` 就用它，否则用可执行文件所在目录。
   **把 `JeeDesk.exe` 与 `config.json` 放任意目录（双击或快捷方式启动）即可携带数据**；

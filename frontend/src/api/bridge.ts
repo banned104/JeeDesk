@@ -64,6 +64,8 @@ interface WailsGoApp {
   EnsureIcons(): Promise<number>;
   RebuildConfigFile(): Promise<void>;
   OpenLogFile(): Promise<void>;
+  OpenCrashReports(): Promise<void>;
+  ReportFrontendError(kind: string, message: string, stack: string, detail: string): Promise<void>;
   CheckUpdates(): Promise<UpdateInfo>;
   SetCollapsedGroups(ids: string[]): Promise<void>;
   SetItemAdmin(groupID: string, itemID: string, admin: boolean): Promise<void>;
@@ -78,8 +80,34 @@ interface WailsRuntime {
   OnFileDropOff?(): void;
 }
 
+let trackedApp: WailsGoApp | null = null;
+let lastBinding: { name: string; args: number; at: number } | null = null;
+
 function getApp(): WailsGoApp | undefined {
-  return (window as unknown as { go?: { main?: { App?: WailsGoApp } } }).go?.main?.App;
+  if (trackedApp) return trackedApp;
+  const raw = (window as unknown as { go?: { main?: { App?: WailsGoApp } } }).go?.main?.App;
+  if (!raw) return undefined;
+  // Remember which binding was called last: Wails answers a failed call with a bare Error(message),
+  // so without this the crash report would not say which method panicked.
+  trackedApp = new Proxy(raw, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof prop === 'string' && typeof value === 'function') {
+        return (...args: unknown[]) => {
+          lastBinding = { name: prop, args: args.length, at: Date.now() };
+          return (value as (...a: unknown[]) => unknown).apply(target, args);
+        };
+      }
+      return value;
+    },
+  });
+  return trackedApp;
+}
+
+/** lastBindingCall names the bridge method most recently invoked, for error reports. */
+export function lastBindingCall(): string {
+  if (!lastBinding) return '';
+  return `${lastBinding.name}(${lastBinding.args} args)`;
 }
 
 function getRuntime(): WailsRuntime | undefined {
@@ -791,6 +819,26 @@ export const bridge = {
       return;
     }
     emitMockEvent('ui:toast', { type: 'info', message: '[Dev] 打开日志' } satisfies ToastPayload);
+  },
+
+  async openCrashReports(): Promise<void> {
+    const app = getApp();
+    if (app) {
+      await app.OpenCrashReports();
+      return;
+    }
+    emitMockEvent('ui:toast', { type: 'info', message: '[Dev] 打开崩溃报告目录' } satisfies ToastPayload);
+  },
+
+  /**
+   * reportFrontendError hands a WebView failure to the backend. It must never throw and is never
+   * awaited by the caller: an error raised while reporting an error is how a crash report becomes a
+   * crash loop.
+   */
+  reportFrontendError(kind: string, message: string, stack: string, detail: string): void {
+    const app = getApp();
+    if (!app) return;
+    void app.ReportFrontendError(kind, message, stack, detail).catch(() => undefined);
   },
 
   async checkUpdates(): Promise<UpdateInfo> {

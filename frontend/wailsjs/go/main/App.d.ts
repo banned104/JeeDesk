@@ -58,6 +58,8 @@ export function OpenBaseDir():Promise<void>;
 
 export function OpenConfigFile():Promise<void>;
 
+export function OpenCrashReports():Promise<void>;
+
 export function OpenItemLocation(arg1:string):Promise<void>;
 
 export function OpenLogFile():Promise<void>;
@@ -79,6 +81,8 @@ export function ReloadConfig():Promise<void>;
 export function RelocateItem(arg1:string,arg2:string):Promise<string>;
 
 export function RenameGroup(arg1:string,arg2:string):Promise<void>;
+
+export function ReportFrontendError(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
 
 export function ResetWindowState():Promise<void>;
 

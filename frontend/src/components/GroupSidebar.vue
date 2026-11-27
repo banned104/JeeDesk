@@ -46,11 +46,9 @@ const emit = defineEmits<{
   (e: 'toggleCollapse'): void;
   (e: 'toggleGroupCollapse', groupId: string): void;
   (e: 'contextmenu', event: MouseEvent, group: Group): void;
-  (e: 'dropItem', payload: { groupId: string; fromGroupId: string; itemId: string }): void;
   (e: 'reorderGroup', payload: { groupId: string; toIndex: number }): void;
 }>();
 
-const dropTargetId = ref('');
 const navRef = ref<HTMLElement | null>(null);
 
 // Long press turns a group row into a draggable handle: a short press is still a click, and a
@@ -350,41 +348,6 @@ const foldedCount = computed(
 function hitCount(groupId: string): number {
   return props.hitCounts[groupId] ?? 0;
 }
-
-function dragPayload(event: DragEvent): { groupId: string; itemId: string } | null {
-  const raw = event.dataTransfer?.getData('application/x-jeedesk-item');
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as { groupId?: string; itemId?: string };
-    if (!parsed.groupId || !parsed.itemId) return null;
-    return { groupId: parsed.groupId, itemId: parsed.itemId };
-  } catch {
-    return null;
-  }
-}
-
-function handleDragOver(event: DragEvent, groupId: string) {
-  if (!event.dataTransfer) return;
-  // Only react to items dragged out of the grid, not to files from Explorer.
-  if (!event.dataTransfer.types.includes('application/x-jeedesk-item')) return;
-  event.preventDefault();
-  event.dataTransfer.dropEffect = 'move';
-  dropTargetId.value = groupId;
-}
-
-function handleDragLeave(groupId: string) {
-  if (dropTargetId.value === groupId) {
-    dropTargetId.value = '';
-  }
-}
-
-function handleDrop(event: DragEvent, groupId: string) {
-  const payload = dragPayload(event);
-  dropTargetId.value = '';
-  if (!payload || payload.groupId === groupId) return;
-  event.preventDefault();
-  emit('dropItem', { groupId, fromGroupId: payload.groupId, itemId: payload.itemId });
-}
 </script>
 
 <template>
@@ -466,7 +429,6 @@ function handleDrop(event: DragEvent, groupId: string) {
           group.id === activeGroupId
             ? 'jd-surface-strong jd-text font-medium border jd-border-strong shadow-sm'
             : 'jd-muted jd-hover border border-transparent',
-          dropTargetId === group.id ? 'ring-2 ring-sky-400/80' : '',
           rowLiftClass(group.id),
           dragGroupId && dragGroupId !== group.id ? 'cursor-grabbing' : '',
         ]"
@@ -476,9 +438,6 @@ function handleDrop(event: DragEvent, groupId: string) {
         @pointerdown="beginPress($event, group.id)"
         @click.capture="handleRowClickCapture"
         @contextmenu.prevent="emit('contextmenu', $event, group)"
-        @dragover="handleDragOver($event, group.id)"
-        @dragleave="handleDragLeave(group.id)"
-        @drop="handleDrop($event, group.id)"
       >
         <span
           v-if="dragGroupId && dropSlot === index"

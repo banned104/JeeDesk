@@ -112,6 +112,8 @@ registerTranslations({
   '检查中…': 'Checking…',
   '打开下载页': 'Open download page',
   '打开日志': 'Open log',
+  '崩溃报告': 'Crash reports',
+  '打开崩溃报告失败：{error}': 'Opening the crash reports failed: {error}',
   '清理图标缓存': 'Clean icon cache',
   '清理中…': 'Cleaning…',
   '补齐缺失图标': 'Fill missing icons',
@@ -815,6 +817,15 @@ async function handleOpenLogFile() {
   }
 }
 
+async function handleOpenCrashReports() {
+  logError.value = '';
+  try {
+    await bridge.openCrashReports();
+  } catch (err) {
+    logError.value = t('打开崩溃报告失败：{error}', { error: errorText(err) });
+  }
+}
+
 async function handleFillIcons() {
   if (fillRunning.value) return;
   fillRunning.value = true;
@@ -1322,6 +1333,13 @@ onBeforeUnmount(() => {
                   @click="handleOpenLogFile"
                 >
                   {{ t('打开日志') }}
+                </button>
+                <button
+                  type="button"
+                  class="h-8 px-3 rounded-xl border text-[11px] transition-colors jd-border jd-surface-soft jd-muted jd-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/70"
+                  @click="handleOpenCrashReports"
+                >
+                  {{ t('崩溃报告') }}
                 </button>
                 <button
                   type="button"

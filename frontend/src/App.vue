@@ -69,7 +69,6 @@ registerTranslations({
   '打开数据目录失败: {error}': 'Opening the data folder failed: {error}',
   已重置窗口位置和大小: 'Window position and size reset',
   '重置失败: {error}': 'Reset failed: {error}',
-  '已移动到「{name}」': 'Moved to "{name}"',
   '移动失败: {error}': 'Moving failed: {error}',
   最近记录已清空: 'Recent items cleared',
   '清空失败: {error}': 'Clearing failed: {error}',
@@ -939,15 +938,6 @@ async function handleResetWindowState() {
   }
 }
 
-async function handleMoveItem(payload: { groupId: string; fromGroupId: string; itemId: string }) {
-  try {
-    await bridge.moveItem(payload.fromGroupId, payload.itemId, payload.groupId, 0);
-    const target = config.groups.find((g) => g.id === payload.groupId);
-    showToast({ type: 'success', message: t('已移动到「{name}」', { name: target?.name ?? t('未命名分组') }) });
-  } catch (err) {
-    showToast({ type: 'error', message: t('移动失败: {error}', { error: errorText(err) }) });
-  }
-}
 
 /** handleReorderGroup applies a long-press drag on the sidebar: MoveGroup takes the post-removal index. */
 async function handleReorderGroup(payload: { groupId: string; toIndex: number }) {
@@ -1538,7 +1528,6 @@ onBeforeUnmount(() => {
           @toggle-collapse="sidebarCollapsed = !sidebarCollapsed"
           @toggle-group-collapse="handleToggleGroupCollapsed"
           @contextmenu="openGroupContextMenu"
-          @drop-item="handleMoveItem"
           @reorder-group="handleReorderGroup"
         />
 

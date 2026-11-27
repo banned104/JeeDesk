@@ -110,6 +110,10 @@ export function OpenConfigFile() {
   return window['go']['main']['App']['OpenConfigFile']();
 }
 
+export function OpenCrashReports() {
+  return window['go']['main']['App']['OpenCrashReports']();
+}
+
 export function OpenItemLocation(arg1) {
   return window['go']['main']['App']['OpenItemLocation'](arg1);
 }
@@ -152,6 +156,10 @@ export function RelocateItem(arg1, arg2) {
 
 export function RenameGroup(arg1, arg2) {
   return window['go']['main']['App']['RenameGroup'](arg1, arg2);
+}
+
+export function ReportFrontendError(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ReportFrontendError'](arg1, arg2, arg3, arg4);
 }
 
 export function ResetWindowState() {

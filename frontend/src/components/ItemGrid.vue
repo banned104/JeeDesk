@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import type { ClickMode, DisplayItem } from '../types/config';
 import { formatItemTooltip } from '../utils/icon';
 import { registerTranslations, t } from '../i18n';
@@ -25,6 +25,7 @@ registerTranslations({
   '以管理员身份运行': 'Run as administrator',
   '正在加载': 'Loading',
 });
+
 
 const props = withDefaults(
   defineProps<{
@@ -74,6 +75,138 @@ const isDragOver = ref(false);
 const tileRefs = ref<HTMLButtonElement[]>([]);
 /** Index of the tile the dragged item would land on, or null when nothing is being dragged. */
 const dropIndex = ref<number | null>(null);
+
+// --- pointer drag -----------------------------------------------------------
+// WebView2 runs with AllowExternalDrop=false (main.go DisableWebViewDrop), which also takes down
+// in-page HTML5 drag and drop: dragover/drop never fire for a tile dragged inside the page. Tile
+// reordering therefore uses pointer events, the same way the sidebar's long-press drag does. The
+// HTML5 handlers further down are only for files dragged in from Explorer.
+
+const DRAG_THRESHOLD_PX = 6;
+
+interface TileDrag {
+  groupId: string;
+  itemId: string;
+  originIndex: number;
+  /** Where the gesture started; the ghost is translated by the pointer's delta from this. */
+  startX: number;
+  startY: number;
+  curX: number;
+  curY: number;
+}
+
+const tileDrag = ref<TileDrag | null>(null);
+/** Sidebar group highlighted as a cross-group drop target, or null. */
+const dropGroupId = ref<string | null>(null);
+let pressIndex = -1;
+let pressStart: { x: number; y: number } | null = null;
+let suppressClick = false;
+
+function handleTilePointerDown(event: PointerEvent, index: number) {
+  if (event.button !== 0 || props.mode !== 'group') return;
+  pressIndex = index;
+  pressStart = { x: event.clientX, y: event.clientY };
+  window.addEventListener('pointermove', handleTilePointerMove);
+  window.addEventListener('pointerup', handleTilePointerUp);
+  window.addEventListener('pointercancel', handleTilePointerUp);
+}
+
+function releaseTileListeners() {
+  window.removeEventListener('pointermove', handleTilePointerMove);
+  window.removeEventListener('pointerup', handleTilePointerUp);
+  window.removeEventListener('pointercancel', handleTilePointerUp);
+}
+
+function resetTileDrag() {
+  releaseTileListeners();
+  tileDrag.value = null;
+  dropIndex.value = null;
+  dropGroupId.value = null;
+  pressStart = null;
+  document.body.classList.remove('select-none');
+}
+
+function handleTilePointerMove(event: PointerEvent) {
+  if (!pressStart) return;
+  if (!tileDrag.value) {
+    if (Math.hypot(event.clientX - pressStart.x, event.clientY - pressStart.y) < DRAG_THRESHOLD_PX) return;
+    const origin = props.items[pressIndex];
+    if (!origin) {
+      resetTileDrag();
+      return;
+    }
+    tileDrag.value = {
+      groupId: origin.groupId,
+      itemId: origin.item.id,
+      originIndex: pressIndex,
+      startX: pressStart.x,
+      startY: pressStart.y,
+      curX: event.clientX,
+      curY: event.clientY,
+    };
+    document.body.classList.add('select-none');
+    return;
+  }
+  tileDrag.value = { ...tileDrag.value, curX: event.clientX, curY: event.clientY };
+  // The dragged tile has pointer-events disabled, so this finds what is actually under the cursor:
+  // another tile (reorder) or a sidebar group row (move to that group).
+  const hovered = document.elementFromPoint(event.clientX, event.clientY);
+  if (!(hovered instanceof HTMLElement)) {
+    dropIndex.value = null;
+    dropGroupId.value = null;
+    return;
+  }
+  const groupRow = hovered.closest<HTMLElement>('[data-group-row]');
+  dropGroupId.value = groupRow?.dataset.groupRow ?? null;
+  const tile = dropGroupId.value ? null : hovered.closest<HTMLElement>('[data-tile-index]');
+  dropIndex.value = tile ? Number(tile.dataset.tileIndex) : null;
+}
+
+function handleTilePointerUp() {
+  const drag = tileDrag.value;
+  const target = dropIndex.value;
+  const targetGroup = dropGroupId.value;
+  resetTileDrag();
+  if (!drag) return;
+  // The click that follows the release must not launch the tile the drag ended on.
+  suppressClick = true;
+  window.setTimeout(() => {
+    suppressClick = false;
+  }, 0);
+
+  if (targetGroup && targetGroup !== drag.groupId) {
+    // Appending: MoveItem clamps toIndex to the end of the target list.
+    emit('reorder', {
+      fromGroupId: drag.groupId,
+      toGroupId: targetGroup,
+      itemId: drag.itemId,
+      toIndex: 1 << 30,
+    });
+    return;
+  }
+  if (target === null || target === drag.originIndex) return;
+  const targetEntry = props.items[target];
+  if (!targetEntry) return;
+  emit('reorder', {
+    fromGroupId: drag.groupId,
+    toGroupId: targetEntry.groupId,
+    itemId: drag.itemId,
+    toIndex: target,
+  });
+}
+
+function handleTileClickCapture(event: MouseEvent) {
+  if (!suppressClick) return;
+  suppressClick = false;
+  event.stopPropagation();
+  event.preventDefault();
+}
+
+
+onBeforeUnmount(() => {
+  // A gesture interrupted by an unmount must not leave window listeners or a select-none body.
+  resetTileDrag();
+});
 
 const showSkeleton = computed(() => !props.configReady || props.loading);
 
@@ -152,61 +285,26 @@ function handleContextMenu(event: MouseEvent, entry: DisplayItem, index: number)
   emit('contextmenu', event, entry);
 }
 
-function handleDragStart(event: DragEvent, entry: DisplayItem) {
-  if (!event.dataTransfer) return;
-  event.dataTransfer.effectAllowed = 'move';
-  event.dataTransfer.setData(
-    'application/x-jeedesk-item',
-    JSON.stringify({ groupId: entry.groupId, itemId: entry.item.id })
-  );
+/** draggedTile returns the drag state when this tile is the one being dragged. */
+function draggedTile(index: number): TileDrag | null {
+  const drag = tileDrag.value;
+  return drag && drag.originIndex === index ? drag : null;
 }
 
-/** readDraggedItem returns the tile payload of an internal drag, or null for a file drag. */
-function readDraggedItem(event: DragEvent): { groupId: string; itemId: string } | null {
-  const raw = event.dataTransfer?.getData('application/x-jeedesk-item');
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as { groupId?: unknown; itemId?: unknown };
-    if (typeof parsed.groupId !== 'string' || typeof parsed.itemId !== 'string') return null;
-    return { groupId: parsed.groupId, itemId: parsed.itemId };
-  } catch {
-    return null;
-  }
+/** tileDragClass lifts the dragged tile out of the grid and stops it intercepting hits. */
+function tileDragClass(index: number): string {
+  return draggedTile(index) ? 'pointer-events-none z-50 shadow-2xl ring-2 ring-sky-400 will-change-transform' : '';
 }
 
-function handleTileDragOver(event: DragEvent, index: number) {
-  // Files are the container's business and the search/recent lists are not orderable.
-  if (props.mode !== 'group' || isFileDrag(event)) return;
-  if (!event.dataTransfer?.types.includes('application/x-jeedesk-item')) return;
-  event.preventDefault();
-  event.stopPropagation();
-  event.dataTransfer.dropEffect = 'move';
-  dropIndex.value = index;
-}
-
-function handleTileDragLeave(index: number) {
-  if (dropIndex.value === index) {
-    dropIndex.value = null;
-  }
-}
-
-function handleTileDrop(event: DragEvent, index: number) {
-  dropIndex.value = null;
-  const dragged = readDraggedItem(event);
-  const target = props.items[index];
-  if (!dragged || !target) return;
-  event.preventDefault();
-  event.stopPropagation();
-  emit('reorder', {
-    fromGroupId: dragged.groupId,
-    toGroupId: target.groupId,
-    itemId: dragged.itemId,
-    toIndex: index,
-  });
-}
-
-function handleTileDragEnd() {
-  dropIndex.value = null;
+/** tileDragStyle moves the ghost with the pointer and keeps the lift that the class asks for. */
+function tileDragStyle(index: number): Record<string, string> {
+  const drag = draggedTile(index);
+  if (!drag) return { 'content-visibility': 'auto', 'contain-intrinsic-size': '92px 96px' };
+  return {
+    'content-visibility': 'auto',
+    'contain-intrinsic-size': '92px 96px',
+    transform: `translate(${drag.curX - drag.startX}px, ${drag.curY - drag.startY}px) scale(1.05)`,
+  };
 }
 
 async function ensureSelectionVisible() {
@@ -254,33 +352,31 @@ defineExpose({ ensureSelectionVisible });
       v-else-if="items.length > 0"
       class="grid grid-cols-[repeat(auto-fill,minmax(92px,1fr))] gap-2.5 content-start"
       style="content-visibility: auto; contain-intrinsic-size: auto 240px"
+      @click.capture="handleTileClickCapture"
     >
       <button
         v-for="(entry, index) in items"
         :key="entryKey(entry)"
         :ref="(el) => setTileRef(el as Element | null, index)"
         type="button"
-        draggable="true"
         :title="tileTitle(entry)"
+        :data-tile-index="index"
         :class="[
           'group relative flex flex-col items-center justify-start gap-2 p-2.5 rounded-xl border transition-all duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400',
           index === selectedIndex
             ? 'jd-surface-strong jd-border-strong ring-1 ring-sky-400/70'
             : 'border-transparent jd-hover',
           isLaunching(entry) ? 'opacity-50 saturate-50 cursor-progress' : '',
-          dropIndex === index ? 'ring-2 ring-sky-400/80 jd-surface-strong' : '',
+          dropIndex === index && !draggedTile(index) ? 'ring-2 ring-sky-400/80 jd-surface-strong' : '',
+          tileDragClass(index),
         ]"
         :aria-disabled="isLaunching(entry)"
         :data-launching="isLaunching(entry) ? 'true' : undefined"
-        style="content-visibility: auto; contain-intrinsic-size: 92px 96px"
+        :style="tileDragStyle(index)"
+        @pointerdown="handleTilePointerDown($event, index)"
         @click="handleClick(entry, index)"
         @dblclick="handleDoubleClick(entry, index)"
         @contextmenu.prevent="handleContextMenu($event, entry, index)"
-        @dragstart="handleDragStart($event, entry)"
-        @dragover="handleTileDragOver($event, index)"
-        @dragleave="handleTileDragLeave(index)"
-        @drop="handleTileDrop($event, index)"
-        @dragend="handleTileDragEnd"
         @mouseenter="emit('select', index)"
       >
         <ItemIcon

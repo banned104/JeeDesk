@@ -9,9 +9,9 @@
   并在构建脚本里同时写入，否则"关于"里的版本会和文件属性不一致。另：Wails 模板只写
   `fixed.file_version`，可执行文件的 ProductVersion 资源仍是 0.0.0（文件属性里看得到）；
   需要的话在 `build/windows/info.json` 的 `fixed` 里补 `product_version`。
-- **更新检查指向 GitHub Releases**：`v1.0.0` 已是首个正式发布，但 `CheckUpdates` 还没有对着真实
-  Release 复核过一遍（tag 命名 `v1.2.3` / `1.2.3` 都能比较，需要确认取到的 `tag_name` 正是这一格式）。
-  验收：在 1.0.0 版上点「检查更新」显示「已是最新」，把版本手动改小后能提示 1.0.0。
+- **更新检查只复核过 API 这一层**：`releases/latest` 返回 `tag_name: v1.0.1`，
+  `compareVersions` 去掉 `v` 前缀与 `-`/`+` 后缀后按段比较（2026-11-28 核对）。尚未在 GUI 里点过一次。
+  验收：1.0.1 版点「检查更新」显示「已是最新」，把 `appVersion` 改小后能提示 `v1.0.1`。
 
 ## 功能缺口
 

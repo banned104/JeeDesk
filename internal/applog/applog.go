@@ -3,7 +3,6 @@
 package applog
 
 import (
-	"fmt"
 	"io"
 	"log"
 	"os"
@@ -61,8 +60,9 @@ func LogPath(baseDir string) string {
 	return filepath.Join(baseDir, logDir, logName)
 }
 
-// PanicPath returns the file that keeps the last recovered panic for the next start.
-func PanicPath(baseDir string) string {
+// LatestReportPath returns the file that names the newest crash report, so the next start can point
+// the user at it. The file is called last-panic.txt for compatibility with older builds.
+func LatestReportPath(baseDir string) string {
 	return filepath.Join(baseDir, logDir, "last-panic.txt")
 }
 
@@ -91,13 +91,8 @@ func ClearMarker(baseDir string) {
 	_ = os.Remove(MarkerPath(baseDir))
 }
 
-// RecordPanic logs a recovered panic and keeps it for the next start.
-func RecordPanic(baseDir string, recovered any) {
-	msg := fmt.Sprintf("[panic] %v", recovered)
-	log.Print(msg)
-	if path := filepath.Join(baseDir, "logs", "last-panic.txt"); path != "" {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err == nil {
-			_ = os.WriteFile(path, []byte(fmt.Sprintf("%s %s\n", time.Now().Format(time.RFC3339), msg)), 0o644)
-		}
-	}
+// RecordPanic records a startup failure: wails.Run returned an error, or the app could not come up.
+// It is not a recovered panic, but it uses the same report shape so the next start finds one format.
+func RecordPanic(baseDir string, value any) {
+	writeCrashFile(baseDir, "startup", value, nil, "")
 }

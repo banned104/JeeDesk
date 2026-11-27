@@ -9,6 +9,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"jeedesk/internal/applog"
 )
 
 const (
@@ -171,6 +173,7 @@ func (s *Store) scheduleFlushLocked() {
 		s.timer.Stop()
 	}
 	s.timer = time.AfterFunc(flushDelay, func() {
+		defer applog.Recover("usage.flushTimer")
 		_ = s.Flush()
 	})
 }

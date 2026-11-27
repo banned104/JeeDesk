@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 
 	"github.com/energye/systray"
+
+	"jeedesk/internal/applog"
 )
 
 // Callbacks defines the actions triggered by system tray interactions and menu items.
@@ -31,6 +33,7 @@ func Start(cb Callbacks) {
 	startOnce.Do(func() {
 		started.Store(true)
 		go func() {
+			defer applog.Recover("tray.loop")
 			runtime.LockOSThread()
 			defer runtime.UnlockOSThread()
 
@@ -89,5 +92,10 @@ func invokeAsync(fn func()) {
 	if fn == nil {
 		return
 	}
-	go fn()
+	go func() {
+		// Menu actions run on their own goroutine: without this, a panic in one of them (quit, open
+		// log, …) kills the process with no report.
+		defer applog.Recover("tray.menuAction")
+		fn()
+	}()
 }

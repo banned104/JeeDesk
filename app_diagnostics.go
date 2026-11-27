@@ -322,6 +322,23 @@ func (a *App) OpenLogFile() error {
 	return launcher.OpenFile(applog.LogPath(a.baseDir))
 }
 
+// OpenCrashReports opens the folder that holds crash reports and the runtime's crash logs. It is
+// the answer to "上次没有正常退出" when the user wants to look at what happened.
+func (a *App) OpenCrashReports() error {
+	dir := applog.CrashDir(a.baseDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return launcher.OpenFile(dir)
+}
+
+// ReportFrontendError records an error the WebView could not handle: a Vue render failure, an
+// uncaught exception, or a rejected promise. The UI cannot write files, so it hands the report to
+// the backend, which appends it to logs/crashes with the rest of the crash evidence.
+func (a *App) ReportFrontendError(kind, message, stack, detail string) {
+	applog.WriteFrontendReport(kind, message, stack, detail)
+}
+
 // CheckUpdates asks the GitHub releases API for the newest published version. It only reports;
 // nothing is downloaded or installed.
 func (a *App) CheckUpdates() UpdateInfo {

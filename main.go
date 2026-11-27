@@ -31,6 +31,19 @@ const (
 func main() {
 	baseDir, dataDirNotice := resolveBaseDirWithFallback()
 
+	// Crash evidence has to be installable before anything else can panic: a GUI build has no
+	// stderr, so the runtime's own crash output is the only trace a fatal fault would leave.
+	applog.Init(baseDir, appVersion)
+	if closeCrashLog, err := applog.InstallCrashOutput(baseDir); err != nil {
+		log.Printf("[crash] cannot install runtime crash output: %v", err)
+	} else {
+		defer closeCrashLog()
+	}
+	// A panic before the run marker exists is rare but would otherwise leave nothing behind. This
+	// one is registered first, so it runs last: when the Recover below already handled the panic it
+	// sees nil and does nothing.
+	defer applog.Recover("main.early")
+
 	app := NewApp(baseDir)
 
 	// A pre-upgrade build uses the old fixed mutex name; wake it rather than running a second copy
@@ -69,7 +82,11 @@ func main() {
 	// Load the config before anything can run concurrently with OnStartup.
 	app.loadConfig()
 	_ = applog.WriteMarker(baseDir)
-	defer applog.ClearMarker(baseDir)
+	// Finish clears the marker only when nothing crashed. It must be registered before the Recover
+	// below: defers run last-in-first-out, so the report has to be written first, otherwise Finish
+	// still sees the flag clear and deletes the marker of a crashed run.
+	defer applog.Finish(baseDir)
+	defer applog.Recover("main")
 
 	// The window is created once, so the saved size, theme, and start-hidden preference have to
 	// be read here rather than applied later from the frontend.

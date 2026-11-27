@@ -12,6 +12,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"jeedesk/internal/applog"
 )
 
 // Win32 hotkey and message constants.
@@ -247,6 +249,7 @@ func (h *HotkeyManager) startLocked(spec string) error {
 	tidReady := make(chan uint32, 1)
 
 	go func() {
+		defer applog.Recover("hook.hotkey")
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 		defer close(done)

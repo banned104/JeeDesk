@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -12,6 +13,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"jeedesk/internal/applog"
 )
 
 // Supported mouse trigger identifiers.
@@ -201,6 +204,7 @@ func (m *MouseHookManager) startLocked() error {
 	stopWorker := make(chan struct{})
 	workerDone := make(chan struct{})
 	go func() {
+		defer applog.Recover("hook.mouse.worker")
 		defer close(workerDone)
 		for {
 			select {
@@ -218,6 +222,7 @@ func (m *MouseHookManager) startLocked() error {
 	done := make(chan struct{})
 
 	go func() {
+		defer applog.Recover("hook.mouse.loop")
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 		defer close(done)
@@ -323,6 +328,13 @@ func (m *MouseHookManager) resetState() {
 }
 
 func (m *MouseHookManager) lowLevelMouseProc(nCode uintptr, wParam uintptr, lParam unsafe.Pointer) uintptr {
+	// A panic here unwinds into Windows' frames and cannot be recovered by the caller, which kills
+	// the process on a mouse click. Swallow it, write a report, and let the event through.
+	defer func() {
+		if r := recover(); r != nil {
+			applog.WriteReport("callback.mouseHook", r, debug.Stack())
+		}
+	}()
 	m.noteEvent()
 	if int32(nCode) >= hcAction {
 		trigger := m.activeTrigger.Load()
@@ -389,6 +401,7 @@ func (m *MouseHookManager) startWatchdogLocked() {
 	m.watchdogDone = done
 	m.noteEvent()
 	go func() {
+		defer applog.Recover("hook.mouse.watchdog")
 		defer close(done)
 		ticker := time.NewTicker(mouseHookWatchdogTick)
 		defer ticker.Stop()

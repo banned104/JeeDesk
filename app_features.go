@@ -734,6 +734,7 @@ func (a *App) ImportConfig() (int, error) {
 func (a *App) ApplyWindowState() {
 	cfg := a.GetConfig()
 	go func() {
+		defer applog.Recover("app.applyWindowState")
 		time.Sleep(60 * time.Millisecond)
 		if a.findMainHwndFn == nil {
 			return
@@ -766,6 +767,7 @@ func (a *App) SaveWindowState() {
 
 // flushWindowState writes the pending window geometry without notifying the UI.
 func (a *App) flushWindowState() {
+	defer applog.Recover("app.flushWindowState")
 	a.windowSaveMu.Lock()
 	if a.windowSaveTimer != nil {
 		a.windowSaveTimer.Stop()

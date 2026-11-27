@@ -3,10 +3,13 @@ package main
 import (
 	"os"
 	"runtime"
+	"runtime/debug"
 	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"jeedesk/internal/applog"
 )
 
 var (
@@ -71,6 +74,13 @@ var (
 )
 
 func enumMainWailsWindowProc(hwnd, _ uintptr) uintptr {
+	// This runs every 80ms while the visibility poller looks for the window; a panic would unwind
+	// into Windows' frames and kill the process, so report it and keep enumerating instead.
+	defer func() {
+		if r := recover(); r != nil {
+			applog.WriteReport("callback.enumWindow", r, debug.Stack())
+		}
+	}()
 	var pid uint32
 	procGetWindowThreadProcID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
 	if pid != enumMainTarget {

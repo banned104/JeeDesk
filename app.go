@@ -16,6 +16,7 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"jeedesk/internal/applog"
 	"jeedesk/internal/config"
 	"jeedesk/internal/hook"
 	"jeedesk/internal/launcher"
@@ -258,6 +259,7 @@ func (a *App) startup(ctx context.Context) {
 	// Missing icons are filled in and orphans are removed in the background: both touch the disk
 	// and must not delay the first paint. Filling runs first so cleanup cannot drop a fresh file.
 	go func() {
+		defer applog.Recover("app.iconsBackfill")
 		// Cached PNGs are keyed by target path, so a better extractor has to invalidate them once.
 		if err := a.syncIconCacheVersion(); err != nil {
 			log.Printf("[icons] cache version sync failed: %v", err)
@@ -339,10 +341,11 @@ func (a *App) domReady(_ context.Context) {
 
 	if a.previousRunCrashed {
 		a.previousRunCrashed = false
-		a.emitToast("warning", "上次没有正常退出，日志与现场见 logs 目录")
+		a.emitToast("warning", fmt.Sprintf("上次没有正常退出，崩溃报告在 %s", applog.CrashDir(a.baseDir)))
 	}
 
 	go func() {
+		defer applog.Recover("app.domReadyDecorate")
 		if a.findMainHwndFn != nil {
 			if hwnd := a.findMainHwndFn(); hwnd != 0 {
 				roundWindowCorners(hwnd)
@@ -397,6 +400,9 @@ func (a *App) Quit() {
 		// Before OnStartup there is nothing to quit through Wails; exiting the process is the only
 		// way left, and a tray "quit" that did nothing would be worse than a hard exit.
 		log.Printf("[app] quit requested before the runtime context exists; exiting")
+		// os.Exit skips every defer, including the one that clears the run marker: leaving it would
+		// make the next start claim the previous run crashed.
+		applog.ClearMarker(a.baseDir)
 		os.Exit(0)
 	}
 	runtime.Quit(ctx)
@@ -490,6 +496,7 @@ func (a *App) scheduleIconFill(cfg config.Config) {
 		a.iconFillTimer.Stop()
 	}
 	a.iconFillTimer = time.AfterFunc(1200*time.Millisecond, func() {
+		defer applog.Recover("app.iconFillTimer")
 		if _, err := a.EnsureIcons(); err != nil {
 			log.Printf("[icons] background fill failed: %v", err)
 		}
@@ -628,6 +635,7 @@ func (a *App) startBlurMonitor() {
 	a.blurStopCh = stopCh
 
 	go func(ch <-chan struct{}) {
+		defer applog.Recover("app.blurMonitor")
 		ticker := time.NewTicker(blurMonitorInterval)
 		defer ticker.Stop()
 
@@ -702,6 +710,7 @@ func (a *App) modalOpen() bool {
 // call. Wails runs OnDomReady before that call, so an immediate WindowHide would be undone; the
 // delayed hides stop as soon as the panel counts as shown, so a fast hotkey press wins.
 func (a *App) hideAfterWebviewShow() {
+	defer applog.Recover("app.hideAfterWebviewShow")
 	for _, delay := range []time.Duration{150 * time.Millisecond, 700 * time.Millisecond} {
 		time.Sleep(delay)
 		// The panel counts as shown only after ShowWindow or ToggleWindow ran; the raw Win32
@@ -749,6 +758,7 @@ func (a *App) ShowWindow() {
 		return
 	}
 	go func() {
+		defer applog.Recover("app.focusAfterShow")
 		time.Sleep(30 * time.Millisecond)
 		a.stateMu.Lock()
 		stillVisible := a.visible

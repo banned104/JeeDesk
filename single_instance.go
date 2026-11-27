@@ -7,12 +7,15 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"jeedesk/internal/applog"
 )
 
 const (
@@ -84,6 +87,13 @@ type SingleInstance struct {
 }
 
 func singleInstanceWndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
+	// Same rule as the other Win32 callbacks: a panic here unwinds into Windows' frames and cannot
+	// be recovered by the caller. Report it and fall back to the default handler.
+	defer func() {
+		if r := recover(); r != nil {
+			applog.WriteReport("callback.singleInstance", r, debug.Stack())
+		}
+	}()
 	switch msg {
 	case wmJeeDeskShow:
 		singleInstanceMu.RLock()
@@ -194,6 +204,7 @@ func AcquireSingleInstance(mutexName, className, windowName string, onWake func(
 	doneCh := make(chan struct{})
 
 	go func() {
+		defer applog.Recover("single-instance.loop")
 		defer close(doneCh)
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()

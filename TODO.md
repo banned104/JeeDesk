@@ -6,7 +6,9 @@
 
 - **版本来源仍有两处**：`build/windows/info.json` 的可执行文件版本资源，与 `app.go` 的
   `appVersion` 变量（可用 `-ldflags -X main.appVersion=…` 覆盖）。发布流程确定后应改为单一来源
-  并在构建脚本里同时写入，否则"关于"里的版本会和文件属性不一致。
+  并在构建脚本里同时写入，否则"关于"里的版本会和文件属性不一致。另：Wails 模板只写
+  `fixed.file_version`，可执行文件的 ProductVersion 资源仍是 0.0.0（文件属性里看得到）；
+  需要的话在 `build/windows/info.json` 的 `fixed` 里补 `product_version`。
 - **更新检查指向 GitHub Releases**：`v1.0.0` 已是首个正式发布，但 `CheckUpdates` 还没有对着真实
   Release 复核过一遍（tag 命名 `v1.2.3` / `1.2.3` 都能比较，需要确认取到的 `tag_name` 正是这一格式）。
   验收：在 1.0.0 版上点「检查更新」显示「已是最新」，把版本手动改小后能提示 1.0.0。

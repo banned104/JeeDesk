@@ -162,7 +162,8 @@ GeekDesk 2.5.14 把数据（分组、条目、设置）整体序列化在安装�
 ## 已知限制
 
 - 仅 Windows：依赖 Win32 API 与 WebView2，没有跨平台计划。
-- 没有正式版本、Tag 与自动发布；要用就自己构建。
+- 已发布 `v1.0.0` 与 `v1.0.1`（[Releases](https://github.com/banned104/JeeDesk/releases)，只附 `JeeDesk.exe`）；
+  没有 CI 与自动发布，其余情况自己构建。
 - 测试会注册全局快捷键并操作外壳图标，需要真实的 Windows 桌面会话，不能跑在无桌面环境里。
 - 前后端契约靠人工同步：改动 `App` 导出方法或 `config.json` 结构时，需同时更新
   `frontend/src/api/bridge.ts` 与 `frontend/src/types/config.ts`，类型检查发现不了这类不一致。

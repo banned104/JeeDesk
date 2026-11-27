@@ -34,7 +34,7 @@ const (
 
 // appVersion is reported in the about section and compared against the latest release. Release
 // builds override it with -ldflags "-X main.appVersion=<version>".
-var appVersion = "1.0.0"
+var appVersion = "1.0.1"
 
 type toastPayload struct {
 	Type    string `json:"type"`

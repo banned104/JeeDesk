@@ -15,15 +15,6 @@
 
 ## 功能缺口
 
-- **exe 版本资源被截断**（记录日期：2026-11-28）`wails build` 写进 `JeeDesk.exe` 的
-  `StringFileInfo` 值是按字节而非字符截断的：`ProductVersion` 变 `1.0`、`ProductName`/`CompanyName`
-  变 `JeeD`、`FileDescription` 变 `JeeDesk - Minimalist D`，语言块是 `000004b0` 而不是 `040904B0`。
-  已确认是 Wails v2.17.1 自带行为：v1.0.1 的已发布产物同样如此，与 `build/windows/info.json`
-  的内容、与 `wails.json` 是否配 `info` 段都无关（两种构建产物逐字相同）。
-  影响面：只有资源管理器「属性 → 详细信息」的显示；`App.CheckUpdates` 读的是 `app.go` 的
-  `appVersion` 常量，不受影响。验收：升级 Wails 或自行写 `.syso` 后，用 `VerQueryValue` 读出的
-  `ProductVersion` 等于 `info.json` 里配置的值，且 `FileDescription` 不被截断。
-
 - **多显示器 DPI 混合缩放**：`font_scale` 按 96 DPI 计算，主副屏缩放不同时面板尺寸会跳变。
 - **分组折叠状态没有上限**：`settings.collapsed_groups` 里会留下已删除分组的 ID，目前靠 `Normalize`
   不报错来容忍；条目多了应做一次差集清理。

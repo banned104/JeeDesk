@@ -231,6 +231,10 @@ func (a *App) SetItemAdmin(groupID string, itemID string, admin bool) error {
 }
 
 // MoveItem moves an item to another group and position, or reorders it inside its own group.
+// The item is removed from its list first, so toIndex is a POST-removal index: 0..len(items) after
+// the removal. Values outside that range are clamped, which is what lets the frontend send 1<<30 to
+// mean "append". ItemGrid converts its insert slot ("insert before items[n]") to this index; keep
+// both sides in sync — app_test.go's TestMoveItem* tests pin the behaviour.
 func (a *App) MoveItem(fromGroupID string, itemID string, toGroupID string, toIndex int) error {
 	mgr := a.configManager()
 	if mgr == nil {

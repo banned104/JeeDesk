@@ -30,6 +30,11 @@ const props = withDefaults(
     searchActive?: boolean;
     /** Per-group search hit counts, shown next to the group name while searching. */
     hitCounts?: Record<string, number>;
+    /**
+     * Group a tile from the grid is being dragged over, owned by ItemGrid and relayed by App. Only
+     * a highlight: the sidebar's own long-press drag keeps using `dragGroupId`.
+     */
+    dropGroupId?: string | null;
   }>(),
   {
     showRecent: false,
@@ -37,6 +42,7 @@ const props = withDefaults(
     collapsedGroupIds: () => [],
     searchActive: false,
     hitCounts: () => ({}),
+    dropGroupId: null,
   }
 );
 
@@ -431,6 +437,8 @@ function hitCount(groupId: string): number {
             : 'jd-muted jd-hover border border-transparent',
           rowLiftClass(group.id),
           dragGroupId && dragGroupId !== group.id ? 'cursor-grabbing' : '',
+          // A tile dragged out of the grid lands on this group: highlight it as the drop target.
+          dropGroupId === group.id ? 'ring-2 ring-sky-400/80 jd-surface-strong' : '',
         ]"
         :style="rowStyle(group.id, index)"
         :data-group-id="group.id"

@@ -71,11 +71,11 @@
 | 项目项 | 约定 |
 | --- | --- |
 | 分支 | 主分支 `main`（2026-11-24 初始化）；任务分支与 Commit 沿用 Skill 默认。 |
-| 版本 | 权威来源是 `build/windows/info.json`（`fixed.file_version` 与 `info.ProductVersion`，当前 `1.0.1`），`wails build` 用它生成可执行文件的版本资源；`app.go` 的 `appVersion` 必须与本行同步（「关于」与 `CheckUpdates` 读它）。`wails.json` 未配置 `info.productVersion`，`frontend/package.json` 的 `version` 只属于前端包。已发布 `v1.0.0`（2026-11-25）与 `v1.0.1`（2026-11-28）；未定正式兼容性政策，普通任务不改版本，发布时先确认版本号与 Tag 命名（`v1.2.3`）。 |
-| CHANGELOG | 根目录 `CHANGELOG.md`，按发布版本倒序分区（`## 1.0.1 — 日期`），未发布的累计变化记在「开发中」；每个版本内按「维护主题 → 变化类型 → 条目」维护，已发布章节保持当时事实。 |
+| 版本 | 权威来源是 `build/windows/info.json`（`fixed.file_version` 与 `info.ProductVersion`，当前 `1.0.2`），`wails build` 用它生成可执行文件的版本资源；`app.go` 的 `appVersion` 必须与本行同步（「关于」与 `CheckUpdates` 读它）。`wails.json` 未配置 `info.productVersion`，`frontend/package.json` 的 `version` 只属于前端包。已发布 `v1.0.0`（2026-11-25）、`v1.0.1`（2026-11-28）与 `v1.0.2`（2026-11-28）；未定正式兼容性政策，普通任务不改版本，发布时先确认版本号与 Tag 命名（`v1.2.3`）。 |
+| CHANGELOG | 根目录 `CHANGELOG.md`，按发布版本倒序分区（`## 1.0.2 — 日期`），未发布的累计变化记在「开发中」；每个版本内按「维护主题 → 变化类型 → 条目」维护，已发布章节保持当时事实。 |
 | 债务 | 根目录 `TODO.md`（Skill 默认），记录已确认的遗留问题；目前存在，内容以文件为准。 |
 | 任务记录 | 见[复杂任务记录与归档](#复杂任务记录与归档)。 |
-| 正式文档 | `README.md`（项目介绍、构建、配置与图标机制、GeekDesk 迁移概要）、`docs/geekdesk-migration.md`（迁移详细过程）。事实以代码为准：配置结构见 `internal/config/schema.go`；后端绑定见 `app.go` 的导出方法与 `frontend/src/api/bridge.ts` 的 `WailsGoApp` 接口。 |
+| 正式文档 | `README.md`（项目介绍、构建、配置与图标机制、GeekDesk 迁移概要）、`docs/geekdesk-migration.md`（迁移详细过程）、`docs/item-drag.md`（网格拖动排序的现状、缺口与重做方案，改动拖动前先读）。事实以代码为准：配置结构见 `internal/config/schema.go`；后端绑定见 `app.go` 的导出方法与 `frontend/src/api/bridge.ts` 的 `WailsGoApp` 接口。 |
 | 发布与运行 | 目标环境是 Windows 桌面会话。远程仓库是 `origin`（`https://github.com/banned104/JeeDesk.git`，2026-11-24 添加），没有 CI 和发布流程。Push、Tag、Release、部署按 Skill 需用户明确授权；推送前先过一遍[不上传的本地内容](#不上传的本地内容)。 |
 
 ## 构建与验证

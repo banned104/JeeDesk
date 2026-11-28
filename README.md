@@ -145,6 +145,14 @@ GeekDesk 2.5.14 把数据（分组、条目、设置）整体序列化在安装�
 4. **部署**：exe + `config.json` 拷入独立目录即用；迁移后注意退出 GeekDesk（两者热键同为
    `Alt+G`）并关闭 GeekDesk 自身的开机自启。
 
+## 拖动排序
+
+网格内拖动项目换位、拖到侧栏分组上换组，用的是指针事件而不是 HTML5 拖放：`main.go` 的
+`DisableWebViewDrop` 让它在本项目的 WebView2 里不可用。落点按「插入位」计算——命中的 tile 按
+左右半区决定插到它之前还是之后，tile 之间的空隙与列表末尾的空白都能落；被拖的 tile 浮到固定
+定位层跟手，其余 tile 让位，指针靠近上下边缘时自动滚动。实现细节与必须保住的契约见
+[docs/item-drag.md](docs/item-drag.md)。
+
 ## 目录结构
 
 | 目录 | 职责 |
@@ -158,11 +166,12 @@ GeekDesk 2.5.14 把数据（分组、条目、设置）整体序列化在安装�
 | `internal/tray` | 系统托盘与内置图标 |
 | `frontend/src` | Vue 界面；`api/bridge.ts` 自行声明后端接口并内置浏览器开发用 mock |
 | `assets/` | 应用图标的源文件与原始素材 |
+| `docs/` | 正式文档：`geekdesk-migration.md`（迁移过程）、`item-drag.md`（拖动排序的现状与重做交接） |
 
 ## 已知限制
 
 - 仅 Windows：依赖 Win32 API 与 WebView2，没有跨平台计划。
-- 已发布 `v1.0.0` 与 `v1.0.1`（[Releases](https://github.com/banned104/JeeDesk/releases)，只附 `JeeDesk.exe`）；
+- 已发布 `v1.0.0`、`v1.0.1` 与 `v1.0.2`（[Releases](https://github.com/banned104/JeeDesk/releases)，只附 `JeeDesk.exe`）；
   没有 CI 与自动发布，其余情况自己构建。
 - 测试会注册全局快捷键并操作外壳图标，需要真实的 Windows 桌面会话，不能跑在无桌面环境里。
 - 前后端契约靠人工同步：改动 `App` 导出方法或 `config.json` 结构时，需同时更新

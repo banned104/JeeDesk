@@ -1065,6 +1065,137 @@ func TestMoveGroupUsesPostRemovalIndex(t *testing.T) {
 	}
 }
 
+// TestMoveItemUsesPostRemovalIndex pins the contract ItemGrid's insert-slot arithmetic relies on:
+// toIndex is read after the item has been taken out, and anything past the end appends. The grid
+// converts "insert before items[n]" to this index, so a change here silently breaks drag reorder.
+func TestMoveItemUsesPostRemovalIndex(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	mgr, err := config.NewManager(cfgPath, nil, nil)
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer mgr.Close()
+
+	app := &App{baseDir: dir, configPath: cfgPath, iconsDir: filepath.Join(dir, "icons")}
+	app.setConfigManager(mgr)
+
+	seed := func() {
+		items := make([]config.Item, 0, 4)
+		for _, id := range []string{"A", "B", "C", "D"} {
+			items = append(items, config.Item{ID: id, Name: id, Path: `C:\Windows\System32\notepad.exe`})
+		}
+		if err := mgr.Update(func(c *config.Config) error {
+			c.Groups = []config.Group{{ID: "g1", Name: "g1", Items: items}}
+			return nil
+		}); err != nil {
+			t.Fatalf("seed items: %v", err)
+		}
+	}
+	order := func() string {
+		ids := ""
+		for _, item := range mgr.Get().Groups[0].Items {
+			ids += item.ID
+		}
+		return ids
+	}
+	// want is the resulting order for "drag items[from] to the slot before items[slot]", with
+	// slot == len meaning append. This mirrors ItemGrid's slot -> toIndex conversion.
+	cases := []struct {
+		name string
+		from int
+		slot int
+		want string
+	}{
+		{"first dragged past the third", 0, 3, "BCAD"},
+		{"first appended below the last row", 0, 4, "BCDA"},
+		{"last dragged to the front", 3, 0, "DABC"},
+		{"second dragged after the third", 1, 3, "ACBD"},
+		{"dropped on its own slot", 1, 1, "ABCD"},
+		{"dropped just after itself", 1, 2, "ABCD"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			seed()
+			itemID := string("ABCD"[tc.from])
+			toIndex := tc.slot
+			if tc.slot > tc.from {
+				toIndex = tc.slot - 1
+			}
+			if err := app.MoveItem("g1", itemID, "g1", toIndex); err != nil {
+				t.Fatalf("MoveItem failed: %v", err)
+			}
+			if got := order(); got != tc.want {
+				t.Fatalf("order after moving %s to slot %d (toIndex %d) = %s, want %s",
+					itemID, tc.slot, toIndex, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMoveItemAppendsAcrossGroups guards the cross-group path: the grid sends 1 << 30 to mean
+// "put it at the end of the target group", and MoveItem has to clamp rather than panic on it.
+func TestMoveItemAppendsAcrossGroups(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	mgr, err := config.NewManager(cfgPath, nil, nil)
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer mgr.Close()
+
+	app := &App{baseDir: dir, configPath: cfgPath, iconsDir: filepath.Join(dir, "icons")}
+	app.setConfigManager(mgr)
+	if err := mgr.Update(func(c *config.Config) error {
+		c.Groups = []config.Group{
+			{ID: "g1", Name: "g1", Items: []config.Item{{ID: "A", Name: "A"}}},
+			{ID: "g2", Name: "g2", Items: []config.Item{{ID: "B", Name: "B"}, {ID: "C", Name: "C"}}},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed groups: %v", err)
+	}
+
+	if err := app.MoveItem("g1", "A", "g2", 1<<30); err != nil {
+		t.Fatalf("MoveItem failed: %v", err)
+	}
+	got := mgr.Get()
+	if len(got.Groups[0].Items) != 0 {
+		t.Fatalf("source group still holds %d items, want 0", len(got.Groups[0].Items))
+	}
+	moved := got.Groups[1].Items
+	if len(moved) != 3 || moved[2].ID != "A" {
+		t.Fatalf("target group order = %v, want B C A", []string{moved[0].ID, moved[1].ID, moved[2].ID})
+	}
+}
+
+// TestMoveItemRefusesMissingGroup keeps a drop onto a group that vanished from losing the item.
+func TestMoveItemRefusesMissingGroup(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	mgr, err := config.NewManager(cfgPath, nil, nil)
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer mgr.Close()
+
+	app := &App{baseDir: dir, configPath: cfgPath, iconsDir: filepath.Join(dir, "icons")}
+	app.setConfigManager(mgr)
+	if err := mgr.Update(func(c *config.Config) error {
+		c.Groups = []config.Group{{ID: "g1", Name: "g1", Items: []config.Item{{ID: "A", Name: "A"}}}}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed groups: %v", err)
+	}
+
+	if err := app.MoveItem("g1", "A", "gone", 0); err == nil {
+		t.Fatal("MoveItem into a missing group returned nil, want an error")
+	}
+	if items := mgr.Get().Groups[0].Items; len(items) != 1 || items[0].ID != "A" {
+		t.Fatalf("item was lost on a refused move: %v", items)
+	}
+}
+
 // TestPendingUndoKindTellsTheTruth keeps the Ctrl+Z routing honest. The label the UI shows is prose,
 // so the kind has to come from its own answer: reading it back out of the label is what silently
 // sent a deleted group to the item undo.

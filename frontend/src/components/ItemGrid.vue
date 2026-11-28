@@ -68,13 +68,13 @@ const emit = defineEmits<{
     e: 'reorder',
     payload: { fromGroupId: string; toGroupId: string; itemId: string; toIndex: number }
   ): void;
+  /** The group row a dragged tile is currently over, so the sidebar can highlight it. */
+  (e: 'dragGroup', groupId: string | null): void;
 }>();
 
 const dragDepth = ref(0);
 const isDragOver = ref(false);
 const tileRefs = ref<HTMLButtonElement[]>([]);
-/** Index of the tile the dragged item would land on, or null when nothing is being dragged. */
-const dropIndex = ref<number | null>(null);
 
 // --- pointer drag -----------------------------------------------------------
 // WebView2 runs with AllowExternalDrop=false (main.go DisableWebViewDrop), which also takes down
@@ -83,24 +83,68 @@ const dropIndex = ref<number | null>(null);
 // HTML5 handlers further down are only for files dragged in from Explorer.
 
 const DRAG_THRESHOLD_PX = 6;
+/** Height of the strip at the top/bottom of the scroll area that auto-scrolls while dragging. */
+const EDGE_SCROLL_PX = 48;
+/** Pixels per frame at full tilt; the ramp starts at a third of it. */
+const EDGE_SCROLL_MAX_STEP = 14;
+/** How long the tiles below take to open/close the slot, matching the sidebar's make-room effect. */
+const SHIFT_TRANSITION_MS = 150;
+const LIFT_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)';
 
 interface TileDrag {
   groupId: string;
   itemId: string;
   originIndex: number;
-  /** Where the gesture started; the ghost is translated by the pointer's delta from this. */
+  /** Where the gesture started; the ghost is placed by the pointer's delta from this. */
   startX: number;
   startY: number;
   curX: number;
   curY: number;
+  /** Size of the tile when it was picked up, so the ghost keeps the tile's footprint. */
+  width: number;
+  height: number;
+  /** Pointer offset inside the tile at pick-up, so the ghost does not jump to the cursor. */
+  offsetX: number;
+  offsetY: number;
+}
+
+/**
+ * Grid geometry, captured once when the drag starts. Measuring live would make the insert slot
+ * chase the tiles it is shifting out of the way.
+ */
+interface GridRow {
+  index: number;
+  top: number;
+  bottom: number;
+  left: number;
+  width: number;
+}
+
+interface GridMetrics {
+  /** Distance between two neighbouring slots, gap included; the unit of the make-room shift. */
+  slotWidth: number;
+  slotHeight: number;
+  rows: GridRow[];
+  /** Scroll offset of the scroller at pick-up; row tops are page coordinates at that moment. */
+  scrollTop: number;
 }
 
 const tileDrag = ref<TileDrag | null>(null);
+/** Insert slot: "insert before items[insertAt]", in 0..items.length. Null while over the sidebar. */
+const insertAt = ref<number | null>(null);
 /** Sidebar group highlighted as a cross-group drop target, or null. */
 const dropGroupId = ref<string | null>(null);
+const scrollerRef = ref<HTMLElement | null>(null);
+const gridRef = ref<HTMLElement | null>(null);
+let metrics: GridMetrics | null = null;
 let pressIndex = -1;
 let pressStart: { x: number; y: number } | null = null;
+let lastPointer = { x: 0, y: 0 };
 let suppressClick = false;
+let scrollFrame = 0;
+let scrollDir = 0;
+/** Style left on the tiles by the drag state, so it can be taken off again on reset. */
+let shiftTouched = false;
 
 function handleTilePointerDown(event: PointerEvent, index: number) {
   if (event.button !== 0 || props.mode !== 'group') return;
@@ -108,33 +152,248 @@ function handleTilePointerDown(event: PointerEvent, index: number) {
   pressStart = { x: event.clientX, y: event.clientY };
   window.addEventListener('pointermove', handleTilePointerMove);
   window.addEventListener('pointerup', handleTilePointerUp);
-  window.addEventListener('pointercancel', handleTilePointerUp);
+  window.addEventListener('pointercancel', handleTilePointerCancel);
+  // Losing the window mid-drag never delivers its pointerup, so it has to be ended from here.
+  window.addEventListener('blur', handleTilePointerCancel);
 }
 
 function releaseTileListeners() {
   window.removeEventListener('pointermove', handleTilePointerMove);
   window.removeEventListener('pointerup', handleTilePointerUp);
-  window.removeEventListener('pointercancel', handleTilePointerUp);
+  window.removeEventListener('pointercancel', handleTilePointerCancel);
+  window.removeEventListener('blur', handleTilePointerCancel);
+}
+
+/**
+ * setDragGroup publishes the sidebar highlight target, but only when it changes: the pointer moves
+ * every frame and a repeated emit would re-render the sidebar for nothing.
+ */
+function setDragGroup(groupId: string | null) {
+  if (dropGroupId.value === groupId) return;
+  dropGroupId.value = groupId;
+  emit('dragGroup', groupId);
+}
+
+/** clearShift drops the make-room offsets so the grid snaps back to its resting layout. */
+function clearShift() {
+  if (!shiftTouched) return;
+  shiftTouched = false;
+  const grid = gridRef.value;
+  if (!grid) return;
+  grid.querySelectorAll<HTMLElement>('[data-tile-shift]').forEach((tile) => {
+    tile.style.removeProperty('translate');
+    tile.removeAttribute('data-tile-shift');
+  });
 }
 
 function resetTileDrag() {
   releaseTileListeners();
+  stopEdgeScroll();
+  clearShift();
   tileDrag.value = null;
-  dropIndex.value = null;
-  dropGroupId.value = null;
+  insertAt.value = null;
+  metrics = null;
   pressStart = null;
+  setDragGroup(null);
+  // The missing class is the real cleanup: a drag cut short must never leave the page unselectable.
   document.body.classList.remove('select-none');
+}
+
+/**
+ * interruptTileDrag ends a gesture that will never get its own pointerup: the window losing focus
+ * (Alt+G hiding the panel, another app taking over) or a right click mid-drag. Without it the ghost
+ * and the make-room offsets would stay on screen until the next left-button release.
+ */
+function interruptTileDrag() {
+  if (!tileDrag.value && !pressStart) return;
+  resetTileDrag();
+}
+
+function slotWidthFrom(element: HTMLElement): number {
+  const style = getComputedStyle(element);
+  const gap = parseFloat(style.columnGap || style.gap || '0') || 0;
+  const first = element.querySelector<HTMLElement>('[data-tile-index="0"]');
+  if (first) {
+    const rect = first.getBoundingClientRect();
+    if (rect.width > 0) return rect.width + gap;
+  }
+  return 92 + gap;
+}
+
+/**
+ * measureGrid records one rect per row. The grid is `auto-fill`, so the column count comes from
+ * counting how many tiles share the first row rather than from any CSS the code can read back.
+ */
+function measureGrid(source: HTMLElement): GridMetrics | null {
+  const grid = gridRef.value;
+  const scroller = scrollerRef.value;
+  if (!grid || !scroller) return null;
+
+  const tiles = Array.from(grid.querySelectorAll<HTMLElement>('[data-tile-index]'));
+  if (tiles.length === 0) return null;
+
+  const firstRect = tiles[0].getBoundingClientRect();
+  // A zero-height tile means the grid is not laid out (still hidden); the drag has nothing to aim at.
+  if (firstRect.height <= 0) return null;
+  const gridStyle = getComputedStyle(grid);
+  const gapV = parseFloat(gridStyle.rowGap || '0') || 0;
+  const slotWidth = slotWidthFrom(source);
+
+  const rows: GridRow[] = [];
+  for (const tile of tiles) {
+    const index = Number(tile.dataset.tileIndex);
+    const rect = tile.getBoundingClientRect();
+    const row = rows.find((candidate) => Math.abs(candidate.top - rect.top) < 1);
+    if (row) {
+      row.bottom = Math.max(row.bottom, rect.bottom);
+      row.left = Math.min(row.left, rect.left);
+      row.width = Math.max(row.width, rect.right - row.left);
+      continue;
+    }
+    rows.push({ index, top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width });
+  }
+  return {
+    slotWidth,
+    slotHeight: firstRect.height + gapV,
+    rows,
+    scrollTop: scroller.scrollTop,
+  };
+}
+
+/**
+ * insertAtFromPointer turns the cursor into an insert slot following docs/item-drag.md 5.2: the
+ * left/right half of the hovered tile decides the slot, and anything below the last row appends.
+ * Working from the captured row geometry instead of `elementFromPoint` is what makes the gaps
+ * between tiles (and any blank space to the right of the last row) droppable.
+ */
+function insertAtFromPointer(x: number, y: number): number | null {
+  const scroller = scrollerRef.value;
+  if (!scroller || !metrics) return null;
+  const { rows } = metrics;
+  if (rows.length === 0) return null;
+
+  // Row tops were captured in page coordinates; scrolling has moved them by this much since.
+  const scrolled = scroller.scrollTop - metrics.scrollTop;
+  const target = rows.find((row) => y <= row.bottom - scrolled);
+  // Below the final row is the append slot, which is what makes the trailing blank space droppable.
+  if (!target) return props.items.length;
+
+  const slotWidth = metrics.slotWidth > 0 ? metrics.slotWidth : 1;
+  const column = Math.max(
+    0,
+    Math.min(Math.floor((x - target.left) / slotWidth), Math.ceil(target.width / slotWidth) - 1)
+  );
+  const into = target.index + column;
+  const inRightHalf = x >= target.left + column * slotWidth + slotWidth / 2;
+  return Math.max(0, Math.min(props.items.length, inRightHalf ? into + 1 : into));
+}
+/**
+ * shiftFor is the make-room offset in slots: everything between the origin and the insert slot
+ * moves out of the way. The dragged tile keeps offset 0 — it is the gap being moved around.
+ */
+function shiftFor(index: number): number {
+  const drag = tileDrag.value;
+  const slot = insertAt.value;
+  if (!drag || slot === null || index === drag.originIndex) return 0;
+  if (slot < drag.originIndex && index >= slot && index < drag.originIndex) return 1;
+  if (slot > drag.originIndex && index > drag.originIndex && index < slot) return -1;
+  return 0;
+}
+
+/**
+ * applyShift writes the offsets straight onto the tiles instead of going through reactive state:
+ * the pointer moves every frame and a re-render per frame would be wasted work. `clearShift`
+ * takes the marker back off, so every reset path — drop, cancel, unmount — cleans up.
+ */
+function applyShift() {
+  const grid = gridRef.value;
+  if (!grid || !metrics) return;
+  shiftTouched = true;
+  const slotWidth = metrics.slotWidth;
+  grid.querySelectorAll<HTMLElement>('[data-tile-index]').forEach((tile) => {
+    const units = shiftFor(Number(tile.dataset.tileIndex));
+    tile.dataset.tileShift = units === 0 ? '0' : String(units);
+    if (units === 0) {
+      tile.style.removeProperty('translate');
+      return;
+    }
+    tile.style.translate = `${units * slotWidth}px 0px`;
+  });
+}
+
+function stopEdgeScroll() {
+  scrollDir = 0;
+  if (scrollFrame !== 0) {
+    cancelAnimationFrame(scrollFrame);
+    scrollFrame = 0;
+  }
+}
+
+/** edgeScrollTick keeps scrolling while the pointer sits in the edge strip, re-aiming each frame. */
+function edgeScrollTick() {
+  scrollFrame = 0;
+  const scroller = scrollerRef.value;
+  if (!scroller || scrollDir === 0 || !tileDrag.value) return;
+  const rect = scroller.getBoundingClientRect();
+  const distance = scrollDir < 0 ? lastPointer.y - rect.top : rect.bottom - lastPointer.y;
+  // Ramp from a third of full speed at the edge of the strip up to full speed at the border.
+  const intensity = Math.min(1, Math.max(0, distance / EDGE_SCROLL_PX));
+  const step = EDGE_SCROLL_MAX_STEP * (0.35 + 0.65 * intensity);
+  const before = scroller.scrollTop;
+  scroller.scrollTop += scrollDir * step;
+  if (scroller.scrollTop === before) {
+    scrollDir = 0;
+    return;
+  }
+  // Scrolling moved the rows under a still pointer, so the slot has to be recomputed.
+  insertAt.value = insertAtFromPointer(lastPointer.x, lastPointer.y);
+  applyShift();
+  scrollFrame = requestAnimationFrame(edgeScrollTick);
+}
+
+/** updateEdgeScroll arms the auto-scroll loop whenever the pointer sits in an edge strip. */
+function updateEdgeScroll(y: number) {
+  const scroller = scrollerRef.value;
+  if (!scroller) return;
+  const rect = scroller.getBoundingClientRect();
+  let dir = 0;
+  if (y < rect.top + EDGE_SCROLL_PX) dir = -1;
+  else if (y > rect.bottom - EDGE_SCROLL_PX) dir = 1;
+  // Only scroll when there is somewhere left to go.
+  if (dir < 0 && scroller.scrollTop <= 0) dir = 0;
+  if (dir > 0 && scroller.scrollTop >= scroller.scrollHeight - scroller.clientHeight) dir = 0;
+  if (dir === scrollDir) {
+    if (dir !== 0 && scrollFrame === 0) scrollFrame = requestAnimationFrame(edgeScrollTick);
+    return;
+  }
+  stopEdgeScroll();
+  scrollDir = dir;
+  if (dir !== 0) scrollFrame = requestAnimationFrame(edgeScrollTick);
+}
+
+/** dropTargetAt reports the sidebar group row under the pointer, if any. */
+function dropTargetAt(x: number, y: number): string | null {
+  const hovered = document.elementFromPoint(x, y);
+  if (!(hovered instanceof HTMLElement)) return null;
+  return hovered.closest<HTMLElement>('[data-group-row]')?.dataset.groupRow ?? null;
 }
 
 function handleTilePointerMove(event: PointerEvent) {
   if (!pressStart) return;
+  // The button may have been released while the window was not listening; the gesture is over then.
+  if ((event.buttons & 1) === 0) {
+    resetTileDrag();
+    return;
+  }
   if (!tileDrag.value) {
     if (Math.hypot(event.clientX - pressStart.x, event.clientY - pressStart.y) < DRAG_THRESHOLD_PX) return;
     const origin = props.items[pressIndex];
-    if (!origin) {
+    const tile = tileRefs.value[pressIndex];
+    if (!origin || !tile) {
       resetTileDrag();
       return;
     }
+    const rect = tile.getBoundingClientRect();
     tileDrag.value = {
       groupId: origin.groupId,
       itemId: origin.item.id,
@@ -143,28 +402,41 @@ function handleTilePointerMove(event: PointerEvent) {
       startY: pressStart.y,
       curX: event.clientX,
       curY: event.clientY,
+      width: rect.width,
+      height: rect.height,
+      offsetX: pressStart.x - rect.left,
+      offsetY: pressStart.y - rect.top,
     };
+    metrics = measureGrid(tile);
     document.body.classList.add('select-none');
+    lastPointer = { x: event.clientX, y: event.clientY };
+    insertAt.value = insertAtFromPointer(event.clientX, event.clientY);
+    applyShift();
     return;
   }
+
   tileDrag.value = { ...tileDrag.value, curX: event.clientX, curY: event.clientY };
-  // The dragged tile has pointer-events disabled, so this finds what is actually under the cursor:
-  // another tile (reorder) or a sidebar group row (move to that group).
-  const hovered = document.elementFromPoint(event.clientX, event.clientY);
-  if (!(hovered instanceof HTMLElement)) {
-    dropIndex.value = null;
-    dropGroupId.value = null;
+  lastPointer = { x: event.clientX, y: event.clientY };
+
+  // The dragged tile is invisible and pointer-events-none, so only the sidebar or the background
+  // can be under the cursor; the insert slot comes from captured geometry, never from hit testing.
+  const groupRow = dropTargetAt(event.clientX, event.clientY);
+  setDragGroup(groupRow);
+  if (groupRow) {
+    insertAt.value = null;
+    applyShift();
+    stopEdgeScroll();
     return;
   }
-  const groupRow = hovered.closest<HTMLElement>('[data-group-row]');
-  dropGroupId.value = groupRow?.dataset.groupRow ?? null;
-  const tile = dropGroupId.value ? null : hovered.closest<HTMLElement>('[data-tile-index]');
-  dropIndex.value = tile ? Number(tile.dataset.tileIndex) : null;
+
+  insertAt.value = insertAtFromPointer(event.clientX, event.clientY);
+  applyShift();
+  updateEdgeScroll(event.clientY);
 }
 
 function handleTilePointerUp() {
   const drag = tileDrag.value;
-  const target = dropIndex.value;
+  const slot = insertAt.value;
   const targetGroup = dropGroupId.value;
   resetTileDrag();
   if (!drag) return;
@@ -175,7 +447,7 @@ function handleTilePointerUp() {
   }, 0);
 
   if (targetGroup && targetGroup !== drag.groupId) {
-    // Appending: MoveItem clamps toIndex to the end of the target list.
+    // MoveItem clamps toIndex to the end of the target list, so an out-of-range value appends.
     emit('reorder', {
       fromGroupId: drag.groupId,
       toGroupId: targetGroup,
@@ -184,14 +456,18 @@ function handleTilePointerUp() {
     });
     return;
   }
-  if (target === null || target === drag.originIndex) return;
-  const targetEntry = props.items[target];
-  if (!targetEntry) return;
+  if (slot === null) return;
+
+  // MoveItem takes the post-removal index: anything after the origin shifted down by one.
+  const toIndex = slot > drag.originIndex ? slot - 1 : slot;
+  if (toIndex === drag.originIndex) return;
+  const anchor = props.items[Math.min(slot, props.items.length - 1)];
+  const toGroupId = anchor?.groupId ?? drag.groupId;
   emit('reorder', {
     fromGroupId: drag.groupId,
-    toGroupId: targetEntry.groupId,
+    toGroupId,
     itemId: drag.itemId,
-    toIndex: target,
+    toIndex,
   });
 }
 
@@ -202,6 +478,16 @@ function handleTileClickCapture(event: MouseEvent) {
   event.preventDefault();
 }
 
+/** Right click or a stolen gesture: no pointerup is coming, so end it here. */
+function handleTilePointerCancel() {
+  interruptTileDrag();
+}
+
+// A context menu opening mid-drag would otherwise freeze the ghost until the next release.
+function handleTileContextMenu(event: MouseEvent, entry: DisplayItem, index: number) {
+  interruptTileDrag();
+  handleContextMenu(event, entry, index);
+}
 
 onBeforeUnmount(() => {
   // A gesture interrupted by an unmount must not leave window listeners or a select-none body.
@@ -291,21 +577,43 @@ function draggedTile(index: number): TileDrag | null {
   return drag && drag.originIndex === index ? drag : null;
 }
 
-/** tileDragClass lifts the dragged tile out of the grid and stops it intercepting hits. */
+/**
+ * tileDragClass keeps the source tile in place as the slot placeholder and stops it intercepting
+ * hits. It stays in the layout (opacity only) so the grid does not reflow when the ghost lifts out.
+ */
 function tileDragClass(index: number): string {
-  return draggedTile(index) ? 'pointer-events-none z-50 shadow-2xl ring-2 ring-sky-400 will-change-transform' : '';
+  return draggedTile(index) ? 'pointer-events-none opacity-0' : '';
 }
 
-/** tileDragStyle moves the ghost with the pointer and keeps the lift that the class asks for. */
-function tileDragStyle(index: number): Record<string, string> {
-  const drag = draggedTile(index);
-  if (!drag) return { 'content-visibility': 'auto', 'contain-intrinsic-size': '92px 96px' };
+/**
+ * tileShiftStyle is the make-room animation: every tile between the origin and the insert slot
+ * slides one slot. The dragged tile is excluded; it is the gap that is being moved around.
+ */
+function tileShiftStyle(index: number): Record<string, string> | undefined {
+  if (!tileDrag.value || draggedTile(index)) return undefined;
   return {
-    'content-visibility': 'auto',
-    'contain-intrinsic-size': '92px 96px',
-    transform: `translate(${drag.curX - drag.startX}px, ${drag.curY - drag.startY}px) scale(1.05)`,
+    transitionProperty: 'translate',
+    transitionDuration: `${SHIFT_TRANSITION_MS}ms`,
+    transitionTimingFunction: LIFT_EASING,
   };
 }
+
+/** ghostStyle places the fixed-position copy of the dragged tile, cursor offset preserved. */
+function ghostStyle(drag: TileDrag): Record<string, string> {
+  return {
+    left: '0',
+    top: '0',
+    width: `${drag.width}px`,
+    height: `${drag.height}px`,
+    transform: `translate3d(${drag.curX - drag.offsetX}px, ${drag.curY - drag.offsetY}px, 0) scale(1.04)`,
+  };
+}
+
+const draggedEntry = computed<DisplayItem | null>(() => {
+  const drag = tileDrag.value;
+  if (!drag) return null;
+  return props.items.find((entry) => entry.groupId === drag.groupId && entry.item.id === drag.itemId) ?? null;
+});
 
 async function ensureSelectionVisible() {
   await nextTick();
@@ -333,6 +641,7 @@ defineExpose({ ensureSelectionVisible });
 
 <template>
   <main
+    ref="scrollerRef"
     class="wails-drop-zone relative flex-1 h-full overflow-y-auto custom-scrollbar p-4"
     style="--wails-drop-target: drop"
     :aria-busy="showSkeleton"
@@ -350,8 +659,9 @@ defineExpose({ ensureSelectionVisible });
     <!-- Item Grid -->
     <div
       v-else-if="items.length > 0"
+      ref="gridRef"
       class="grid grid-cols-[repeat(auto-fill,minmax(92px,1fr))] gap-2.5 content-start"
-      style="content-visibility: auto; contain-intrinsic-size: auto 240px"
+      style="contain: layout style"
       @click.capture="handleTileClickCapture"
     >
       <button
@@ -367,17 +677,16 @@ defineExpose({ ensureSelectionVisible });
             ? 'jd-surface-strong jd-border-strong ring-1 ring-sky-400/70'
             : 'border-transparent jd-hover',
           isLaunching(entry) ? 'opacity-50 saturate-50 cursor-progress' : '',
-          dropIndex === index && !draggedTile(index) ? 'ring-2 ring-sky-400/80 jd-surface-strong' : '',
           tileDragClass(index),
         ]"
         :aria-disabled="isLaunching(entry)"
         :data-launching="isLaunching(entry) ? 'true' : undefined"
-        :style="tileDragStyle(index)"
+        :style="tileShiftStyle(index)"
         @pointerdown="handleTilePointerDown($event, index)"
         @click="handleClick(entry, index)"
         @dblclick="handleDoubleClick(entry, index)"
-        @contextmenu.prevent="handleContextMenu($event, entry, index)"
-        @mouseenter="emit('select', index)"
+        @contextmenu.prevent="handleTileContextMenu($event, entry, index)"
+        @mouseenter="!tileDrag && emit('select', index)"
       >
         <ItemIcon
           :icon="entry.item.icon"
@@ -531,6 +840,29 @@ defineExpose({ ensureSelectionVisible });
         </p>
       </div>
     </Transition>
+
+    <!--
+      Tile ghost. Teleported to <body> and position: fixed, so the scrolling container cannot clip
+      it and the grid's `contain` cannot skip it. The source tile stays in the grid as the
+      placeholder that the make-room animation shifts around.
+    -->
+    <Teleport to="body">
+      <div
+        v-if="tileDrag && draggedEntry"
+        class="pointer-events-none fixed z-[999] flex flex-col items-center justify-start gap-2 p-2.5 rounded-xl border jd-border-strong jd-surface-strong shadow-[0_18px_38px_-10px_rgba(0,0,0,0.7)] ring-1 ring-sky-400/60 will-change-transform"
+        :style="ghostStyle(tileDrag)"
+        aria-hidden="true"
+      >
+        <ItemIcon
+          :icon="draggedEntry.item.icon"
+          :path="draggedEntry.item.path"
+          :name="draggedEntry.item.name"
+          :cache-buster="cacheBuster"
+          size-class="w-12 h-12"
+        />
+        <span class="w-full text-center text-xs jd-text truncate">{{ draggedEntry.item.name }}</span>
+      </div>
+    </Teleport>
   </main>
 </template>
 

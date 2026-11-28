@@ -137,6 +137,12 @@ const configRemoved = ref(false);
 const topBarRef = ref<InstanceType<typeof TopBar> | null>(null);
 const gridRef = ref<InstanceType<typeof ItemGrid> | null>(null);
 const settingsRef = ref<InstanceType<typeof SettingsModal> | null>(null);
+/**
+ * Sidebar group a dragged tile is currently over. ItemGrid owns the drag, the sidebar only shows
+ * the highlight, so this stays a plain relay instead of letting either component reach into the
+ * other's state.
+ */
+const itemDragGroupId = ref<string | null>(null);
 
 // Modals
 const settingsOpen = ref(false);
@@ -948,7 +954,10 @@ async function handleReorderGroup(payload: { groupId: string; toIndex: number })
   }
 }
 
-/** handleReorderItems applies an in-grid drag: the dropped tile takes the target tile's slot. */
+/**
+ * handleReorderItems applies an in-grid drag. toIndex is already the post-removal index MoveItem
+ * expects (ItemGrid converts the insert slot), and 1 << 30 means "append to the target group".
+ */
 async function handleReorderItems(payload: {
   fromGroupId: string;
   toGroupId: string;
@@ -1529,6 +1538,7 @@ onBeforeUnmount(() => {
           @toggle-group-collapse="handleToggleGroupCollapsed"
           @contextmenu="openGroupContextMenu"
           @reorder-group="handleReorderGroup"
+          :drop-group-id="itemDragGroupId"
         />
 
         <ItemGrid
@@ -1554,6 +1564,7 @@ onBeforeUnmount(() => {
           @add-group="openAddGroupModal"
           @open-start-menu-import="openStartMenuImport"
           @reorder="handleReorderItems"
+          @drag-group="itemDragGroupId = $event"
         />
       </div>
 
